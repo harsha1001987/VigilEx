@@ -11,5 +11,8 @@ package com.extrive.vigilex.data.api
  *   IP to res/xml/network_security_config.xml.
  */
 object ApiConfig {
-    const val BASE_URL = "http://10.0.2.2:8000/"
+    // Physical phone: this must be your computer's current LAN IP.
+    // Find it again anytime with `ipconfig` (look for "IPv4 Address" under
+    // your Wi-Fi adapter) - it can change if you reconnect to Wi-Fi.
+    const val BASE_URL = "http://10.79.144.153:8000/"
 }
