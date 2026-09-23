@@ -76,6 +76,7 @@ class PoseEstimator:
 
     def _warmup(self) -> None:
         dummy = np.zeros((320, 320, 3), dtype=np.uint8)
+
         self._model.predict(
             dummy,
             device=self.device,
@@ -120,22 +121,28 @@ class PoseEstimator:
             return []
 
         track_ids = result.boxes.id
+
         if track_ids is None:
             return []
 
         people = _extract_landmarks(result)
+
         output: List[Tuple[int, Landmarks]] = []
 
-        for index, person in enumerate(people):
-            if index >= len(track_ids):
-                break
+        count = min(len(people), len(track_ids))
 
-            output.append((int(track_ids[index].item()), person))
+        for index in range(count):
+            output.append(
+                (
+                    int(track_ids[index].item()),
+                    people[index],
+                )
+            )
 
         return output
 
     def close(self) -> None:
-        """Release model/GPU resources when the processor is finished."""
+        """Release model/GPU resources when processing is finished."""
         if hasattr(self, "_model"):
             del self._model
 
@@ -144,21 +151,29 @@ class PoseEstimator:
 
 
 def _extract_landmarks(result) -> List[Landmarks]:
-    """Convert an Ultralytics result into plain Python tuples."""
+    """Convert an Ultralytics result into plain Python COCO-17 landmarks."""
     if result.keypoints is None or result.keypoints.xy is None:
         return []
 
     xy = result.keypoints.xy.detach().cpu().numpy()
 
     confidence = result.keypoints.conf
+
     if confidence is not None:
         conf = confidence.detach().cpu().numpy()
     else:
-        conf = np.ones(xy.shape[:2], dtype=np.float32)
+        conf = np.ones(
+            xy.shape[:2],
+            dtype=np.float32,
+        )
 
     people: List[Landmarks] = []
 
     for person_index in range(len(xy)):
+        # VigilEx expects exactly COCO-17 keypoints.
+        if xy.shape[1] < 17:
+            continue
+
         person: Landmarks = []
 
         for point_index in range(17):
@@ -182,77 +197,170 @@ def _valid(
     return point is not None and point[2] >= threshold
 
 
-def _best_side(
+def _side_score(
     landmarks: Landmarks,
+    indices: Tuple[int, ...],
+    threshold: float,
+) -> float:
+    """Confidence score for one body side."""
+    score = 0.0
+
+    for index in indices:
+        point = landmarks[index]
+
+        if _valid(point, threshold):
+            score += point[2]
+
+    return score
+
+
+def _select_side(
+    landmarks: Landmarks,
+    left_indices: Tuple[int, ...],
+    right_indices: Tuple[int, ...],
+    threshold: float,
+) -> str:
+    """
+    Select one consistent body side for posture geometry.
+
+    Using one side for shoulder -> elbow -> wrist and hip -> knee -> ankle
+    prevents the posture calculation from accidentally mixing left and
+    right body parts.
+    """
+    left_score = _side_score(
+        landmarks,
+        left_indices,
+        threshold,
+    )
+
+    right_score = _side_score(
+        landmarks,
+        right_indices,
+        threshold,
+    )
+
+    if right_score > left_score:
+        return "right"
+
+    return "left"
+
+
+def _side_point(
+    landmarks: Landmarks,
+    side: str,
     left_index: int,
     right_index: int,
-    threshold: float = MIN_LANDMARK_CONFIDENCE,
-) -> Optional[Landmark]:
-    left = landmarks[left_index]
-    right = landmarks[right_index]
+    threshold: float,
+) -> Optional[Tuple[float, float]]:
+    """Return one side's point as a plain (x, y) tuple."""
+    index = left_index if side == "left" else right_index
+    point = landmarks[index]
 
-    left_ok = _valid(left, threshold)
-    right_ok = _valid(right, threshold)
-
-    if not left_ok and not right_ok:
+    if not _valid(point, threshold):
         return None
-    if left_ok and not right_ok:
-        return left
-    if right_ok and not left_ok:
-        return right
 
-    return left if left[2] >= right[2] else right
+    return (
+        float(point[0]),
+        float(point[1]),
+    )
 
 
 def landmarks_to_posture_dict(
     landmarks: Landmarks,
     confidence_threshold: float = MIN_LANDMARK_CONFIDENCE,
-) -> Dict[str, Optional[Landmark]]:
+) -> Dict[str, Tuple[float, float]]:
     """
-    Convert COCO-17 landmarks into the representation expected by posture.py.
+    Convert COCO-17 landmarks into the exact point format expected by
+    posture.assess_posture().
 
-    For side-dependent joints, the side with higher confidence is selected.
+    The posture engine expects plain (x, y) tuples, not YOLO
+    (x, y, confidence) triples.
+
+    One body side is selected consistently so the geometry does not mix
+    left and right joints.
     """
-    def valid(point: Landmark) -> Optional[Landmark]:
-        return point if point[2] >= confidence_threshold else None
+    if len(landmarks) < 17:
+        return {}
 
-    shoulder = _best_side(
-        landmarks, LEFT_SHOULDER, RIGHT_SHOULDER, confidence_threshold
-    )
-    elbow = _best_side(
-        landmarks, LEFT_ELBOW, RIGHT_ELBOW, confidence_threshold
-    )
-    wrist = _best_side(
-        landmarks, LEFT_WRIST, RIGHT_WRIST, confidence_threshold
-    )
-    hip = _best_side(
-        landmarks, LEFT_HIP, RIGHT_HIP, confidence_threshold
-    )
-    knee = _best_side(
-        landmarks, LEFT_KNEE, RIGHT_KNEE, confidence_threshold
-    )
-    ankle = _best_side(
-        landmarks, LEFT_ANKLE, RIGHT_ANKLE, confidence_threshold
-    )
-    ear = _best_side(
-        landmarks, LEFT_EAR, RIGHT_EAR, confidence_threshold
+    side = _select_side(
+        landmarks,
+        (
+            LEFT_EAR,
+            LEFT_SHOULDER,
+            LEFT_ELBOW,
+            LEFT_WRIST,
+            LEFT_HIP,
+            LEFT_KNEE,
+            LEFT_ANKLE,
+        ),
+        (
+            RIGHT_EAR,
+            RIGHT_SHOULDER,
+            RIGHT_ELBOW,
+            RIGHT_WRIST,
+            RIGHT_HIP,
+            RIGHT_KNEE,
+            RIGHT_ANKLE,
+        ),
+        confidence_threshold,
     )
 
-    nose = valid(landmarks[NOSE])
-    head = ear if ear is not None else nose
+    points: Dict[str, Tuple[float, float]] = {}
 
-    # Keep the same simple point-based contract used by the posture engine.
-    return {
-        "head": head,
-        "neck": head,
-        "shoulder": shoulder,
-        "elbow": elbow,
-        "wrist": wrist,
-        "trunk": shoulder,
-        "hip": hip,
-        "knee": knee,
-        "ankle": ankle,
+    mapping = {
+        "ear": (
+            LEFT_EAR,
+            RIGHT_EAR,
+        ),
+        "shoulder": (
+            LEFT_SHOULDER,
+            RIGHT_SHOULDER,
+        ),
+        "elbow": (
+            LEFT_ELBOW,
+            RIGHT_ELBOW,
+        ),
+        "wrist": (
+            LEFT_WRIST,
+            RIGHT_WRIST,
+        ),
+        "hip": (
+            LEFT_HIP,
+            RIGHT_HIP,
+        ),
+        "knee": (
+            LEFT_KNEE,
+            RIGHT_KNEE,
+        ),
+        "ankle": (
+            LEFT_ANKLE,
+            RIGHT_ANKLE,
+        ),
     }
+
+    for name, (left_index, right_index) in mapping.items():
+        point = _side_point(
+            landmarks,
+            side,
+            left_index,
+            right_index,
+            confidence_threshold,
+        )
+
+        if point is not None:
+            points[name] = point
+
+    # If neither ear is reliable, use the nose as a fallback head point.
+    if "ear" not in points:
+        nose = landmarks[NOSE]
+
+        if _valid(nose, confidence_threshold):
+            points["ear"] = (
+                float(nose[0]),
+                float(nose[1]),
+            )
+
+    return points
 
 
 def landmarks_to_render_points(
@@ -284,13 +392,26 @@ def landmarks_to_render_points(
 
     for index, name in enumerate(names):
         x, y, confidence = landmarks[index]
-        points[name] = (x, y) if confidence >= confidence_threshold else None
+
+        points[name] = (
+            (float(x), float(y))
+            if confidence >= confidence_threshold
+            else None
+        )
 
     return points
 
 
-def _distance(a: Landmark, b: Landmark) -> float:
-    return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+def _distance(
+    a: Landmark,
+    b: Landmark,
+) -> float:
+    return float(
+        np.hypot(
+            a[0] - b[0],
+            a[1] - b[1],
+        )
+    )
 
 
 def estimate_camera_yaw_deg(
@@ -298,12 +419,21 @@ def estimate_camera_yaw_deg(
     confidence_threshold: float = MIN_LANDMARK_CONFIDENCE,
 ) -> float:
     """
-    Coarse 2D camera-view gate.
+    Estimate a coarse camera-view angle from 2D pose geometry.
 
-    This is NOT a true 3D camera-pose estimator. If both shoulders and both
-    hips cannot be observed, 90 degrees is returned so posture scoring can
-    reject the frame.
+    Convention used by VigilEx:
+
+        0 degrees  = profile / side view
+        90 degrees = frontal view
+
+    This is NOT a true 3D camera-pose estimator.
+
+    A profile camera is appropriate for the sagittal-plane RULA/REBA
+    geometry used by posture.py.
     """
+    if len(landmarks) < 17:
+        return 90.0
+
     ls = landmarks[LEFT_SHOULDER]
     rs = landmarks[RIGHT_SHOULDER]
     lh = landmarks[LEFT_HIP]
@@ -322,24 +452,40 @@ def estimate_camera_yaw_deg(
         (ls[1] + rs[1]) / 2.0,
         1.0,
     )
+
     hip_mid = (
         (lh[0] + rh[0]) / 2.0,
         (lh[1] + rh[1]) / 2.0,
         1.0,
     )
 
-    torso_length = _distance(shoulder_mid, hip_mid)
+    torso_length = _distance(
+        shoulder_mid,
+        hip_mid,
+    )
 
     if torso_length <= 1e-6:
         return 90.0
 
     ratio = shoulder_width / torso_length
 
-    # Same empirical idea as the old Ergoscan gate: use 2D shoulder width
-    # relative to torso length only as a coarse view-quality signal.
+    # Empirical reference:
+    #   profile -> narrow projected shoulder width -> ~0 degrees
+    #   frontal -> wider projected shoulder width -> ~90 degrees
     frontal_ratio = 0.5
 
-    normalized = min(ratio / frontal_ratio, 1.0)
-    yaw = float(np.degrees(np.arccos(normalized)))
+    normalized = min(
+        max(ratio / frontal_ratio, 0.0),
+        1.0,
+    )
 
-    return max(0.0, min(90.0, yaw))
+    yaw = float(
+        np.degrees(
+            np.arcsin(normalized)
+        )
+    )
+
+    return max(
+        0.0,
+        min(90.0, yaw),
+    )
