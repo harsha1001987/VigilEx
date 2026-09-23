@@ -8,8 +8,10 @@ Notes
 - This module is geometry/scoring only.
 - Camera-view validation is handled upstream.
 - YOLO11n-Pose / ByteTrack are handled upstream.
+- The current VigilEx pose estimator may provide `ear`, `head`, or `neck`
+  for the head/neck reference point.
 - COCO-17 does not provide finger landmarks, so wrist twist is
-  represented as a fixed lowest-risk value.
+  represented as a fixed lowest-risk value and marked as not measured.
 - Force/load, muscle use, coupling, and activity are fixed at their
   lowest-risk values because those inputs are not available from the
   current pose model.
@@ -19,6 +21,13 @@ from __future__ import annotations
 
 import math
 from typing import Any, Dict, Optional, Tuple
+
+
+# ---------------------------------------------------------------------------
+# VigilEx methodology version
+# ---------------------------------------------------------------------------
+
+METHODOLOGY_VERSION = "vigilex-rula-reba-v1"
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +49,10 @@ def _norm(v: Point) -> float:
     return math.sqrt(v[0] ** 2 + v[1] ** 2)
 
 
-def _angle_between_vectors(a: Point, b: Point) -> Optional[float]:
+def _angle_between_vectors(
+    a: Point,
+    b: Point,
+) -> Optional[float]:
     na = _norm(a)
     nb = _norm(b)
 
@@ -183,7 +195,9 @@ def _knee_flexion_deg(
     return 180.0 - joint_angle
 
 
-def _rula_legs_score(knee_flexion: Optional[float]) -> int:
+def _rula_legs_score(
+    knee_flexion: Optional[float],
+) -> int:
     if knee_flexion is None:
         return 1
 
@@ -193,7 +207,9 @@ def _rula_legs_score(knee_flexion: Optional[float]) -> int:
     return 2
 
 
-def _reba_legs_score(knee_flexion: Optional[float]) -> int:
+def _reba_legs_score(
+    knee_flexion: Optional[float],
+) -> int:
     if knee_flexion is None:
         return 1
 
@@ -255,11 +271,8 @@ def _lookup_rula_a(
     wrist = max(1, min(3, wrist))
     wrist_twist = max(1, min(2, wrist_twist))
 
-    # Flatten the four dimensions into the standard RULA A lookup.
     wrist_index = (wrist - 1) * 2 + (wrist_twist - 1)
 
-    # RULA Table A is represented here by upper-arm/lower-arm rows
-    # and wrist/wrist-twist columns.
     rows = [
         [1, 2, 2, 2, 3, 3, 4, 5],
         [2, 2, 2, 3, 3, 4, 5, 5],
@@ -287,7 +300,6 @@ def _lookup_rula_b(
     trunk = max(1, min(4, trunk))
     legs = max(1, min(2, legs))
 
-    # Compact representation of the RULA B table.
     table = [
         [1, 2, 3, 3, 4, 5, 5],
         [2, 2, 3, 4, 4, 5, 5],
@@ -307,7 +319,10 @@ def _lookup_rula_b(
     ]
 
 
-def _rula_final_score(score_a: int, score_b: int) -> int:
+def _rula_final_score(
+    score_a: int,
+    score_b: int,
+) -> int:
     a = max(1, min(7, score_a))
     b = max(1, min(7, score_b))
 
@@ -361,9 +376,15 @@ def _lookup_reba_a(
     neck = max(1, min(2, neck))
     legs = max(1, min(3, legs))
 
-    # A compact conservative mapping for the available pose inputs.
-    row = min(trunk + neck - 2, len(REBA_TABLE_A) - 1)
-    col = min((legs - 1) * 2, len(REBA_TABLE_A[0]) - 1)
+    row = min(
+        trunk + neck - 2,
+        len(REBA_TABLE_A) - 1,
+    )
+
+    col = min(
+        (legs - 1) * 2,
+        len(REBA_TABLE_A[0]) - 1,
+    )
 
     return REBA_TABLE_A[row][col]
 
@@ -382,12 +403,18 @@ def _lookup_reba_b(
         len(REBA_TABLE_B) - 1,
     )
 
-    col = min(wrist - 1, len(REBA_TABLE_B[0]) - 1)
+    col = min(
+        wrist - 1,
+        len(REBA_TABLE_B[0]) - 1,
+    )
 
     return REBA_TABLE_B[row][col]
 
 
-def _lookup_reba_c(score_a: int, score_b: int) -> int:
+def _lookup_reba_c(
+    score_a: int,
+    score_b: int,
+) -> int:
     score_a = max(1, min(12, score_a))
     score_b = max(1, min(12, score_b))
 
@@ -398,7 +425,9 @@ def _lookup_reba_c(score_a: int, score_b: int) -> int:
 # Risk levels
 # ---------------------------------------------------------------------------
 
-def _rula_risk_level(score: Optional[int]) -> str:
+def _rula_risk_level(
+    score: Optional[int],
+) -> str:
     if score is None:
         return "not_measured"
 
@@ -414,7 +443,9 @@ def _rula_risk_level(score: Optional[int]) -> str:
     return "very_high"
 
 
-def _reba_risk_level(score: Optional[int]) -> str:
+def _reba_risk_level(
+    score: Optional[int],
+) -> str:
     if score is None:
         return "not_measured"
 
@@ -489,11 +520,11 @@ def assess_posture(
     landmarks: Dict[str, Point],
 ) -> Dict[str, Any]:
     """
-    Calculate RULA and REBA from posture landmarks.
+    Calculate RULA and REBA from VigilEx pose landmarks.
 
     Expected landmark keys:
 
-        ear
+        head / neck / ear
         shoulder
         elbow
         wrist
@@ -502,10 +533,25 @@ def assess_posture(
         ankle
 
     Each landmark is an (x, y) pair.
+
+    The current VigilEx pose estimator provides `head` and `neck`.
+    `ear` is also supported for backwards compatibility.
     """
+
+    measurement_empty = {
+        "upper_arm": False,
+        "lower_arm": False,
+        "neck": False,
+        "trunk": False,
+        "legs": False,
+        "wrist": False,
+        "wrist_twist": False,
+    }
 
     if not landmarks or "shoulder" not in landmarks:
         return {
+            "methodology_version": METHODOLOGY_VERSION,
+            "measurement": measurement_empty,
             "rula": {
                 "score": None,
                 "risk": "not_measured",
@@ -522,7 +568,31 @@ def assess_posture(
         }
 
     shoulder = landmarks.get("shoulder")
+
+    # -----------------------------------------------------------------------
+    # Head / neck compatibility
+    # -----------------------------------------------------------------------
+    #
+    # New VigilEx pose_estimator.py:
+    #
+    #     head
+    #     neck
+    #
+    # Older posture pipeline:
+    #
+    #     ear
+    #
+    # Prefer ear when available, then head, then neck.
+    # -----------------------------------------------------------------------
+
     ear = landmarks.get("ear")
+
+    if ear is None:
+        ear = landmarks.get("head")
+
+    if ear is None:
+        ear = landmarks.get("neck")
+
     elbow = landmarks.get("elbow")
     wrist = landmarks.get("wrist")
     hip = landmarks.get("hip")
@@ -552,7 +622,7 @@ def assess_posture(
         else None
     )
 
-    # Shoulder -> ear relative to vertical.
+    # Shoulder -> head/ear relative to vertical.
     neck_angle = angle_from_vertical(
         shoulder,
         ear,
@@ -570,6 +640,28 @@ def assess_posture(
         knee,
         ankle,
     )
+
+    # -----------------------------------------------------------------------
+    # Measurement state
+    # -----------------------------------------------------------------------
+
+    upper_arm_measured = upper_arm_angle is not None
+    lower_arm_measured = lower_arm_flexion is not None
+    neck_measured = neck_angle is not None
+    trunk_measured = trunk_angle is not None
+    legs_measured = knee_flexion is not None
+
+    measurement = {
+        "upper_arm": upper_arm_measured,
+        "lower_arm": lower_arm_measured,
+        "neck": neck_measured,
+        "trunk": trunk_measured,
+        "legs": legs_measured,
+
+        # COCO-17 cannot properly measure these.
+        "wrist": False,
+        "wrist_twist": False,
+    }
 
     # -----------------------------------------------------------------------
     # Component bands
@@ -688,14 +780,14 @@ def assess_posture(
             upper_arm_angle,
             upper_arm,
             4,
-            measured=upper_arm_angle is not None,
+            measured=upper_arm_measured,
         ),
         "lower_arm": _component(
             "Lower arm (elbow)",
             lower_arm_flexion,
             lower_arm,
             2,
-            measured=lower_arm_flexion is not None,
+            measured=lower_arm_measured,
         ),
         "wrist": _component(
             "Wrist",
@@ -716,21 +808,21 @@ def assess_posture(
             neck_angle,
             rula_neck,
             3,
-            measured=neck_angle is not None,
+            measured=neck_measured,
         ),
         "trunk": _component(
             "Trunk",
             trunk_angle,
             trunk,
             4,
-            measured=trunk_angle is not None,
+            measured=trunk_measured,
         ),
         "legs": _component(
             "Legs",
             knee_flexion,
             rula_legs,
             2,
-            measured=knee_flexion is not None,
+            measured=legs_measured,
         ),
     }
 
@@ -744,14 +836,14 @@ def assess_posture(
             upper_arm_angle,
             upper_arm,
             4,
-            measured=upper_arm_angle is not None,
+            measured=upper_arm_measured,
         ),
         "lower_arm": _component(
             "Lower arm (elbow)",
             lower_arm_flexion,
             lower_arm,
             2,
-            measured=lower_arm_flexion is not None,
+            measured=lower_arm_measured,
         ),
         "wrist": _component(
             "Wrist",
@@ -765,21 +857,21 @@ def assess_posture(
             neck_angle,
             reba_neck,
             2,
-            measured=neck_angle is not None,
+            measured=neck_measured,
         ),
         "trunk": _component(
             "Trunk",
             trunk_angle,
             trunk,
             4,
-            measured=trunk_angle is not None,
+            measured=trunk_measured,
         ),
         "legs": _component(
             "Legs",
             knee_flexion,
             reba_legs,
             3,
-            measured=knee_flexion is not None,
+            measured=legs_measured,
         ),
     }
 
@@ -788,17 +880,27 @@ def assess_posture(
     # -----------------------------------------------------------------------
 
     return {
+        "methodology_version": METHODOLOGY_VERSION,
+
+        "measurement": measurement,
+
         "rula": {
             "score": rula_grand_score,
-            "risk": _rula_risk_level(rula_grand_score),
+            "risk": _rula_risk_level(
+                rula_grand_score,
+            ),
             "angles": angles,
             "components": rula_components,
         },
+
         "reba": {
             "score": reba_score_c,
-            "risk": _reba_risk_level(reba_score_c),
+            "risk": _reba_risk_level(
+                reba_score_c,
+            ),
             "angles": angles,
             "components": reba_components,
         },
+
         "label": "scored",
     }
