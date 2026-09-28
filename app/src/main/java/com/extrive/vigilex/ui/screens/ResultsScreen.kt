@@ -21,47 +21,68 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
-import com.extrive.vigilex.data.mock.JointResult
-import com.extrive.vigilex.data.mock.MockData
-import com.extrive.vigilex.data.mock.RiskLevel
+import com.extrive.vigilex.data.api.ApiResult
+import com.extrive.vigilex.data.model.AssessmentDto
+import com.extrive.vigilex.data.model.getCoveragePct
+import com.extrive.vigilex.data.model.getFramesObserved
+import com.extrive.vigilex.data.model.getPrimaryTrackId
+import com.extrive.vigilex.data.model.getValidFrames
+import com.extrive.vigilex.data.model.rebaScore
+import com.extrive.vigilex.data.model.rulaScore
+import com.extrive.vigilex.data.repository.AssessmentRepository
 import com.extrive.vigilex.ui.components.BottomActionBar
+import com.extrive.vigilex.ui.components.ErrorState
 import com.extrive.vigilex.ui.components.ListContainer
+import com.extrive.vigilex.ui.components.LoadingState
 import com.extrive.vigilex.ui.components.MetricCard
 import com.extrive.vigilex.ui.components.OverlineLabel
 import com.extrive.vigilex.ui.components.PrimaryButton
-import com.extrive.vigilex.ui.components.RiskBadge
 import com.extrive.vigilex.ui.components.RowDivider
 import com.extrive.vigilex.ui.components.SecondaryButton
 import com.extrive.vigilex.ui.components.VigilExTopBar
-import com.extrive.vigilex.ui.components.color
-import com.extrive.vigilex.ui.components.label
+import com.extrive.vigilex.ui.state.UiState
 import com.extrive.vigilex.ui.theme.BackgroundWhite
 import com.extrive.vigilex.ui.theme.BorderSubtle
-import com.extrive.vigilex.ui.theme.DividerColor
 import com.extrive.vigilex.ui.theme.OnYellow
 import com.extrive.vigilex.ui.theme.TextMuted
 import com.extrive.vigilex.ui.theme.TextPrimary
 import com.extrive.vigilex.ui.theme.TextSecondary
 import com.extrive.vigilex.ui.theme.VigilExYellow
+import kotlin.math.roundToInt
 
 /**
- * Results layout for a completed analysis. Scoring is not implemented yet, so
- * values come from mock data; the structure is ready for REBA/RULA/NIOSH output.
+ * Displays real assessment results retrieved from PostgreSQL backend API.
+ * Shows Assessment Status, Primary Worker Track ID, RULA/REBA Scores, Risk Bands, Coverage %, and Interventions.
  */
 @Composable
 fun ResultsScreen(
+    assessmentId: String,
     onBackClick: () -> Unit,
     onGenerateReport: () -> Unit,
     onDone: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val overallScore = 72
-    val overallLevel = RiskLevel.MODERATE
-    val assessment = MockData.assessments.first()
+    val assessmentRepository = remember { AssessmentRepository() }
+    var assessmentState by remember { mutableStateOf<UiState<AssessmentDto>>(UiState.Loading) }
+    var retryTrigger by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(assessmentId, retryTrigger) {
+        assessmentState = UiState.Loading
+        assessmentState = when (val result = assessmentRepository.getAssessment(assessmentId)) {
+            is ApiResult.Success -> UiState.Success(result.data)
+            is ApiResult.Error -> UiState.Error(result.message)
+        }
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -81,216 +102,208 @@ fun ResultsScreen(
         ) {
             VigilExTopBar(title = "Results", onBackClick = onBackClick)
 
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Spacer(modifier = Modifier.height(8.dp))
+            when (val state = assessmentState) {
+                is UiState.Loading -> LoadingState()
+                is UiState.Error -> ErrorState(message = state.message, onRetry = { retryTrigger++ })
+                is UiState.Success -> {
+                    val assessment = state.data
+                    val rula = assessment.rulaScore
+                    val reba = assessment.rebaScore
 
-                // Context line
-                Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-                    Text(
-                        text = "${assessment.taskName} — ${assessment.areaName}",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = TextPrimary
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "${assessment.siteName} · ${assessment.timestamp}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextMuted
-                    )
-                }
+                    val primaryTrackId = rula?.getPrimaryTrackId() ?: reba?.getPrimaryTrackId()
+                    val framesObserved = rula?.getFramesObserved() ?: reba?.getFramesObserved()
+                    val rulaValid = rula?.getValidFrames()
+                    val rebaValid = reba?.getValidFrames()
 
-                Spacer(modifier = Modifier.height(24.dp))
+                    val rulaValue = rula?.score?.roundToInt()?.toString() ?: "—"
+                    val rulaRisk = rula?.riskBand?.replaceFirstChar { it.uppercase() } ?: "Unavailable"
+                    val rulaCoverage = rula?.getCoveragePct() ?: "—"
 
-                // Overall risk hero
-                Column(
-                    modifier = Modifier
-                        .padding(horizontal = 20.dp)
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(20.dp))
-                        .background(BackgroundWhite)
-                        .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
-                        .padding(24.dp)
-                ) {
-                    OverlineLabel(text = "Overall risk")
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            text = overallScore.toString(),
-                            style = MaterialTheme.typography.displayLarge,
-                            color = TextPrimary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "/ 100",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextMuted,
-                            modifier = Modifier.padding(bottom = 10.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
+                    val rebaValue = reba?.score?.roundToInt()?.toString() ?: "—"
+                    val rebaRisk = reba?.riskBand?.replaceFirstChar { it.uppercase() } ?: "Unavailable"
+                    val rebaCoverage = reba?.getCoveragePct() ?: "—"
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Header Info
+                        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
+                            Text(
+                                text = "Assessment ID: ${assessment.id}",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = TextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Status: ${assessment.status.uppercase()} · ${assessment.methodologyVersion ?: "vigilex-rula-reba-v1"}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextMuted
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        // Primary Worker Card
+                        Column(
                             modifier = Modifier
-                                .size(10.dp)
-                                .clip(CircleShape)
-                                .background(overallLevel.color())
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = overallLevel.label().uppercase(),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = overallLevel.color()
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(16.dp))
-                    RiskScale(level = overallLevel)
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Change is needed soon. Shoulder loading is the main driver of this score.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextSecondary
-                    )
-                }
+                                .padding(horizontal = 20.dp)
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(BackgroundWhite)
+                                .border(1.dp, BorderSubtle, RoundedCornerShape(20.dp))
+                                .padding(24.dp)
+                        ) {
+                            OverlineLabel(text = "Primary Worker")
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = if (primaryTrackId != null) "Track ID: $primaryTrackId" else "Track ID: Auto-selected",
+                                style = MaterialTheme.typography.headlineLarge,
+                                color = TextPrimary
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = if (framesObserved != null) "$framesObserved frames observed in video pipeline" else "Worker tracking complete",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextSecondary
+                            )
+                        }
 
-                Spacer(modifier = Modifier.height(28.dp))
+                        Spacer(modifier = Modifier.height(28.dp))
 
-                // Method scores
-                OverlineLabel(text = "Method scores", modifier = Modifier.padding(horizontal = 20.dp))
-                Spacer(modifier = Modifier.height(10.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    MetricCard(label = "REBA", value = "9", caption = "High", modifier = Modifier.weight(1f))
-                    MetricCard(label = "RULA", value = "5", caption = "Investigate", modifier = Modifier.weight(1f))
-                    MetricCard(
-                        label = "NIOSH",
-                        value = "—",
-                        caption = "No load given",
-                        valueColor = TextMuted,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(28.dp))
-
-                // Joint breakdown
-                OverlineLabel(text = "Joint breakdown", modifier = Modifier.padding(horizontal = 20.dp))
-                Spacer(modifier = Modifier.height(10.dp))
-                ListContainer(modifier = Modifier.padding(horizontal = 20.dp)) {
-                    MockData.jointResults.forEachIndexed { index, joint ->
-                        JointRow(joint = joint)
-                        if (index < MockData.jointResults.lastIndex) RowDivider()
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(28.dp))
-
-                // Recommendations
-                OverlineLabel(text = "Recommended interventions", modifier = Modifier.padding(horizontal = 20.dp))
-                Spacer(modifier = Modifier.height(10.dp))
-                ListContainer(modifier = Modifier.padding(horizontal = 20.dp)) {
-                    MockData.recommendations.forEachIndexed { index, text ->
+                        // Method scores (RULA & REBA)
+                        OverlineLabel(text = "Ergonomic Scores", modifier = Modifier.padding(horizontal = 20.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp),
-                            verticalAlignment = Alignment.Top
+                                .padding(horizontal = 20.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .clip(CircleShape)
-                                    .background(VigilExYellow),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = (index + 1).toString(),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = OnYellow
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(14.dp))
-                            Text(
-                                text = text,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextPrimary,
+                            MetricCard(
+                                label = "RULA",
+                                value = rulaValue,
+                                caption = "$rulaRisk · $rulaCoverage cov",
+                                modifier = Modifier.weight(1f)
+                            )
+                            MetricCard(
+                                label = "REBA",
+                                value = rebaValue,
+                                caption = "$rebaRisk · $rebaCoverage cov",
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        if (index < MockData.recommendations.lastIndex) RowDivider()
+
+                        Spacer(modifier = Modifier.height(28.dp))
+
+                        // Coverage & Validity Details
+                        OverlineLabel(text = "Pipeline Coverage Details", modifier = Modifier.padding(horizontal = 20.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        ListContainer(modifier = Modifier.padding(horizontal = 20.dp)) {
+                            DetailRow(label = "Observed Frames", value = framesObserved?.toString() ?: "—")
+                            RowDivider()
+                            DetailRow(label = "RULA Valid Frames", value = rulaValid?.toString() ?: "—")
+                            RowDivider()
+                            DetailRow(label = "RULA Coverage", value = rulaCoverage)
+                            RowDivider()
+                            DetailRow(label = "REBA Valid Frames", value = rebaValid?.toString() ?: "—")
+                            RowDivider()
+                            DetailRow(label = "REBA Coverage", value = rebaCoverage)
+                        }
+
+                        Spacer(modifier = Modifier.height(28.dp))
+
+                        // Recommended Interventions
+                        OverlineLabel(text = "Recommended Interventions", modifier = Modifier.padding(horizontal = 20.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                        ListContainer(modifier = Modifier.padding(horizontal = 20.dp)) {
+                            if (assessment.interventions.isEmpty()) {
+                                Text(
+                                    text = "No specific interventions required for this assessment.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextMuted,
+                                    modifier = Modifier.padding(16.dp)
+                                )
+                            } else {
+                                assessment.interventions.forEachIndexed { index, intervention ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        verticalAlignment = Alignment.Top
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(24.dp)
+                                                .clip(CircleShape)
+                                                .background(VigilExYellow),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = (index + 1).toString(),
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = OnYellow
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(14.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "${intervention.riskDriver.replace("_", " ").uppercase()} (${intervention.priority.uppercase()})",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = TextPrimary
+                                            )
+                                            Spacer(modifier = Modifier.height(4.dp))
+                                            Text(
+                                                text = intervention.recommendation,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = TextSecondary
+                                            )
+                                            if (!intervention.extriveProduct.isNull_or_empty()) {
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    text = "Product: ${intervention.extriveProduct}",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = TextMuted
+                                                )
+                                            }
+                                        }
+                                    }
+                                    if (index < assessment.interventions.lastIndex) RowDivider()
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(32.dp))
                     }
                 }
-
-                Spacer(modifier = Modifier.height(32.dp))
             }
         }
     }
 }
 
-@Composable
-private fun RiskScale(level: RiskLevel) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        RiskLevel.entries.forEach { segment ->
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(if (segment == level) segment.color() else DividerColor)
-            )
-        }
-    }
-    Spacer(modifier = Modifier.height(6.dp))
-    Row(modifier = Modifier.fillMaxWidth()) {
-        RiskLevel.entries.forEach { segment ->
-            Text(
-                text = segment.label(),
-                style = MaterialTheme.typography.labelMedium,
-                color = if (segment == level) segment.color() else TextMuted,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
+private fun String?.isNull_or_empty() = this == null || this.isEmpty()
 
 @Composable
-private fun JointRow(joint: JointResult) {
+private fun DetailRow(label: String, value: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(joint.level.color())
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = TextSecondary
         )
-        Spacer(modifier = Modifier.width(14.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = joint.name,
-                style = MaterialTheme.typography.titleSmall,
-                color = TextPrimary
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = joint.detail,
-                style = MaterialTheme.typography.bodySmall,
-                color = TextMuted
-            )
-        }
-        RiskBadge(level = joint.level)
+        Text(
+            text = value,
+            style = MaterialTheme.typography.titleSmall,
+            color = TextPrimary
+        )
     }
 }

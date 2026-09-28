@@ -28,7 +28,7 @@ DEFAULT_MODEL_PATH = CV_DIR / "models" / "yolo11n-pose.pt"
 DEFAULT_MAX_PEOPLE = 5
 DEFAULT_SAMPLE_HZ = 5.0
 MAX_FRAME_DIM = 1280
-MAX_CAMERA_YAW_DEG = 45.0
+MAX_CAMERA_YAW_DEG = 90.0
 MIN_LANDMARK_CONFIDENCE = 0.5
 MIN_VISIBLE_KEYPOINTS = 5
 
@@ -109,6 +109,7 @@ def process_video(
     stride_hz: float = DEFAULT_SAMPLE_HZ,
     model_path: Optional[str] = None,
     max_people: int = DEFAULT_MAX_PEOPLE,
+    max_camera_yaw_deg: float = MAX_CAMERA_YAW_DEG,
 ) -> Dict:
     """Process one VigilEx assessment video and return analysis data."""
 
@@ -238,7 +239,7 @@ def process_video(
 
             camera_yaw_deg = estimate_camera_yaw_deg(landmarks)
 
-            side_view_ok = camera_yaw_deg <= MAX_CAMERA_YAW_DEG
+            side_view_ok = camera_yaw_deg <= max_camera_yaw_deg
 
             if side_view_ok:
                 assessment = assess_posture(posture_dict)
