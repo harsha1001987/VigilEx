@@ -43,11 +43,14 @@ import com.extrive.vigilex.ui.theme.VigilExYellow
 
 @Composable
 fun CaptureScreen(
-    onBackClick: () -> Unit,
-    onContinueToAnalysis: () -> Unit,
     assessmentId: String? = null,
+    onBackClick: () -> Unit,
+    onContinueToAnalysis: (videoPath: String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Default video path for processing
+    val selectedVideoPath = "backend/tests/19832490-hd_1920_1080_25fps (1).mp4"
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = BackgroundWhite,
@@ -55,7 +58,7 @@ fun CaptureScreen(
             BottomActionBar {
                 PrimaryButton(
                     text = "Analyze capture",
-                    onClick = onContinueToAnalysis
+                    onClick = { onContinueToAnalysis(selectedVideoPath) }
                 )
             }
         }
@@ -133,7 +136,7 @@ fun CaptureScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "CameraX integration coming soon",
+                            text = "Sample video selected for backend analysis",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted
                         )

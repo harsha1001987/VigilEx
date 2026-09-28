@@ -190,6 +190,17 @@ class AssessmentUpdate(AssessmentBase):
     pass
 
 
+class CVPersistPayload(BaseModel):
+    cv_result: dict[str, Any]
+    primary_assessment: dict[str, Any] | None = None
+
+
+class ProcessVideoPayload(BaseModel):
+    video_path: str
+    stride_hz: float = 5.0
+    requested_track_id: int | None = None
+
+
 class AssessmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
