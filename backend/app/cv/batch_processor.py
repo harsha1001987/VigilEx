@@ -23,7 +23,12 @@ from .posture import assess_posture
 
 
 CV_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CV_DIR.parents[2]
+
 DEFAULT_MODEL_PATH = CV_DIR / "models" / "yolo11n-pose.pt"
+
+# Hardcoded test video
+TEST_VIDEO_PATH = PROJECT_ROOT / "backend" / "tests" / "19832490-hd_1920_1080_25fps (1).mp4"
 
 DEFAULT_MAX_PEOPLE = 5
 DEFAULT_SAMPLE_HZ = 5.0
@@ -39,7 +44,8 @@ ProgressFn = Callable[[float, str, Dict], None]
 
 def _visible_count(landmarks) -> int:
     return sum(
-        1 for _, _, confidence in landmarks
+        1
+        for _, _, confidence in landmarks
         if confidence >= MIN_LANDMARK_CONFIDENCE
     )
 
@@ -76,7 +82,8 @@ def _select_worker(
                 return track_id, landmarks
 
     candidates = [
-        item for item in tracked
+        item
+        for item in tracked
         if _visible_count(item[1]) >= MIN_VISIBLE_KEYPOINTS
     ]
 
@@ -90,7 +97,10 @@ def _average(values: List[float]) -> Optional[float]:
     return sum(values) / len(values) if values else None
 
 
-def _risk_distribution(keyframes: List[Dict], method: str) -> Dict[str, int]:
+def _risk_distribution(
+    keyframes: List[Dict],
+    method: str,
+) -> Dict[str, int]:
     counts: Dict[str, int] = {}
 
     for frame in keyframes:
@@ -261,10 +271,16 @@ def process_video(
                 trunk_angles.append(float(angles["trunk_deg"]))
 
             if angles.get("upper_arm_deg") is not None:
-                upper_arm_angles.append(float(angles["upper_arm_deg"]))
+                upper_arm_angles.append(
+                    float(angles["upper_arm_deg"])
+                )
 
-            if angles.get("knee_deg") is not None:
-                knee_angles.append(float(angles["knee_deg"]))
+            # FIXED:
+            # posture.py returns "knee_flexion_deg", not "knee_deg".
+            if angles.get("knee_flexion_deg") is not None:
+                knee_angles.append(
+                    float(angles["knee_flexion_deg"])
+                )
 
             if angles.get("neck_deg") is not None:
                 neck_angles.append(float(angles["neck_deg"]))
@@ -273,7 +289,10 @@ def process_video(
                 {
                     "t": round(t_sec, 3),
                     "track_id": int(track_id),
-                    "camera_yaw_deg": round(float(camera_yaw_deg), 2),
+                    "camera_yaw_deg": round(
+                        float(camera_yaw_deg),
+                        2,
+                    ),
                     "side_view_ok": bool(side_view_ok),
                     "landmarks": [
                         {
@@ -288,10 +307,7 @@ def process_video(
                 }
             )
 
-            if (
-                on_progress
-                and sampled_frames % 5 == 0
-            ):
+            if on_progress and sampled_frames % 5 == 0:
                 fraction = (
                     frame_index / max(1, total_frames)
                     if total_frames
@@ -299,6 +315,7 @@ def process_video(
                 )
 
                 elapsed = time.time() - started
+
                 eta = (
                     (elapsed / fraction) * (1.0 - fraction)
                     if fraction > 0
@@ -357,29 +374,53 @@ def process_video(
         },
 
         "quality": {
-            "detection_fraction": round(detection_fraction, 4),
-            "scoreable_fraction": round(scoreable_fraction, 4),
+            "detection_fraction": round(
+                detection_fraction,
+                4,
+            ),
+            "scoreable_fraction": round(
+                scoreable_fraction,
+                4,
+            ),
             "camera_view_ok": scoreable_frames > 0,
             "max_camera_yaw_deg": MAX_CAMERA_YAW_DEG,
         },
 
         "derived_angles": {
             "trunk_deg_avg": _average(trunk_angles),
-            "trunk_deg_max": max(trunk_angles) if trunk_angles else None,
-            "upper_arm_deg_avg": _average(upper_arm_angles),
+            "trunk_deg_max": (
+                max(trunk_angles)
+                if trunk_angles
+                else None
+            ),
+            "upper_arm_deg_avg": _average(
+                upper_arm_angles
+            ),
             "upper_arm_deg_max": (
                 max(upper_arm_angles)
                 if upper_arm_angles
                 else None
             ),
             "knee_deg_avg": _average(knee_angles),
-            "knee_deg_max": max(knee_angles) if knee_angles else None,
+            "knee_deg_max": (
+                max(knee_angles)
+                if knee_angles
+                else None
+            ),
             "neck_deg_avg": _average(neck_angles),
-            "neck_deg_max": max(neck_angles) if neck_angles else None,
+            "neck_deg_max": (
+                max(neck_angles)
+                if neck_angles
+                else None
+            ),
         },
 
         "rula": {
-            "max_score": max(rula_scores) if rula_scores else None,
+            "max_score": (
+                max(rula_scores)
+                if rula_scores
+                else None
+            ),
             "frames_scored": len(rula_scores),
             "risk_distribution": _risk_distribution(
                 keyframes,
@@ -388,7 +429,11 @@ def process_video(
         },
 
         "reba": {
-            "max_score": max(reba_scores) if reba_scores else None,
+            "max_score": (
+                max(reba_scores)
+                if reba_scores
+                else None
+            ),
             "frames_scored": len(reba_scores),
             "risk_distribution": _risk_distribution(
                 keyframes,
@@ -401,6 +446,7 @@ def process_video(
         "meta": {
             "pose_model": Path(model).name,
             "processor": "VigilExBatchProcessor",
+            "input_video": Path(video_path).name,
         },
     }
 
@@ -432,7 +478,9 @@ def process_image(
     frame = cv2.imread(image_path)
 
     if frame is None:
-        raise RuntimeError(f"Cannot read image: {image_path}")
+        raise RuntimeError(
+            f"Cannot read image: {image_path}"
+        )
 
     height, width = frame.shape[:2]
 
@@ -440,6 +488,7 @@ def process_image(
         scale = MAX_FRAME_DIM / max(width, height)
         width = max(1, round(width * scale))
         height = max(1, round(height * scale))
+
         frame = cv2.resize(
             frame,
             (width, height),
@@ -460,7 +509,9 @@ def process_image(
             return {
                 "methodology_version": METHODOLOGY_VERSION,
                 "worker": None,
-                "quality": {"worker_detected": False},
+                "quality": {
+                    "worker_detected": False
+                },
                 "rula": None,
                 "reba": None,
                 "derived_angles": {},
@@ -472,12 +523,19 @@ def process_image(
             key=_visible_count,
         )
 
-        camera_yaw_deg = estimate_camera_yaw_deg(landmarks)
-        side_view_ok = camera_yaw_deg <= MAX_CAMERA_YAW_DEG
+        camera_yaw_deg = estimate_camera_yaw_deg(
+            landmarks
+        )
+
+        side_view_ok = (
+            camera_yaw_deg <= MAX_CAMERA_YAW_DEG
+        )
 
         if side_view_ok:
             assessment = assess_posture(
-                landmarks_to_posture_dict(landmarks)
+                landmarks_to_posture_dict(
+                    landmarks
+                )
             )
         else:
             assessment = _empty_assessment()
@@ -507,9 +565,11 @@ def process_image(
                 ),
             },
 
-            "derived_angles": assessment["reba"].get(
-                "angles",
-                {},
+            "derived_angles": (
+                assessment["reba"].get(
+                    "angles",
+                    {},
+                )
             ),
 
             "rula": assessment["rula"],
@@ -528,7 +588,9 @@ def process_image(
                         {
                             "x": float(x),
                             "y": float(y),
-                            "confidence": float(confidence),
+                            "confidence": float(
+                                confidence
+                            ),
                         }
                         for x, y, confidence in landmarks
                     ],
@@ -546,3 +608,161 @@ def process_image(
 
     finally:
         estimator.close()
+
+
+# ============================================================
+# DIRECT VIDEO TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    print("=" * 70)
+    print("VIGILEX CV VIDEO TEST")
+    print("=" * 70)
+
+    print(f"Project root : {PROJECT_ROOT}")
+    print(f"Video        : {TEST_VIDEO_PATH}")
+    print(f"Model        : {DEFAULT_MODEL_PATH}")
+    print()
+
+    if not TEST_VIDEO_PATH.exists():
+        raise FileNotFoundError(
+            f"Test video not found:\n{TEST_VIDEO_PATH}\n\n"
+            "Put the video in the VigilEx project root."
+        )
+
+    print("Starting video processing...")
+    print()
+
+    result = process_video(
+        str(TEST_VIDEO_PATH),
+        stride_hz=5.0,
+    )
+
+    print()
+    print("=" * 70)
+    print("VIGILEX RESULT")
+    print("=" * 70)
+
+    print()
+    print("VIDEO")
+    print("-" * 70)
+    print(f"Duration       : {result['video']['duration_sec']} sec")
+    print(f"FPS            : {result['video']['fps']}")
+    print(
+        f"Resolution     : "
+        f"{result['video']['width']} x "
+        f"{result['video']['height']}"
+    )
+    print(
+        f"Frames total   : "
+        f"{result['video']['frames_total']}"
+    )
+    print(
+        f"Frames sampled : "
+        f"{result['video']['frames_sampled']}"
+    )
+
+    print()
+    print("WORKER")
+    print("-" * 70)
+    print(f"Track ID       : {result['worker']['track_id']}")
+    print(
+        f"Detected       : "
+        f"{result['worker']['detected_frames']}"
+    )
+    print(
+        f"First seen     : "
+        f"{result['worker']['first_seen_sec']}"
+    )
+    print(
+        f"Last seen      : "
+        f"{result['worker']['last_seen_sec']}"
+    )
+
+    print()
+    print("QUALITY")
+    print("-" * 70)
+    print(
+        f"Detection      : "
+        f"{result['quality']['detection_fraction']}"
+    )
+    print(
+        f"Scoreable      : "
+        f"{result['quality']['scoreable_fraction']}"
+    )
+    print(
+        f"Camera view OK  : "
+        f"{result['quality']['camera_view_ok']}"
+    )
+    print(
+        f"Max yaw allowed : "
+        f"{result['quality']['max_camera_yaw_deg']} deg"
+    )
+
+    print()
+    print("DERIVED ANGLES")
+    print("-" * 70)
+
+    angles = result["derived_angles"]
+
+    print(
+        f"Trunk           : "
+        f"avg={angles['trunk_deg_avg']}, "
+        f"max={angles['trunk_deg_max']}"
+    )
+
+    print(
+        f"Upper arm       : "
+        f"avg={angles['upper_arm_deg_avg']}, "
+        f"max={angles['upper_arm_deg_max']}"
+    )
+
+    print(
+        f"Knee flexion    : "
+        f"avg={angles['knee_deg_avg']}, "
+        f"max={angles['knee_deg_max']}"
+    )
+
+    print(
+        f"Neck            : "
+        f"avg={angles['neck_deg_avg']}, "
+        f"max={angles['neck_deg_max']}"
+    )
+
+    print()
+    print("RULA")
+    print("-" * 70)
+    print(
+        f"Maximum score   : "
+        f"{result['rula']['max_score']}"
+    )
+    print(
+        f"Frames scored   : "
+        f"{result['rula']['frames_scored']}"
+    )
+    print(
+        f"Risk distribution: "
+        f"{result['rula']['risk_distribution']}"
+    )
+
+    print()
+    print("REBA")
+    print("-" * 70)
+    print(
+        f"Maximum score   : "
+        f"{result['reba']['max_score']}"
+    )
+    print(
+        f"Frames scored   : "
+        f"{result['reba']['frames_scored']}"
+    )
+    print(
+        f"Risk distribution: "
+        f"{result['reba']['risk_distribution']}"
+    )
+
+    print()
+    print("=" * 70)
+    print("VIDEO PROCESSING COMPLETE")
+    print("=" * 70)

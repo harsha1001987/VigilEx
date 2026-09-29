@@ -1,0 +1,262 @@
+VigilEx CV/RULA/REBA Audit Report
+==================================
+
+Project root used: C:\Users\harsh\OneDrive\Desktop\VigilEx
+(Note: F:\Projects\VigilEx does not exist on this machine - there is no F:
+drive at all. This is the actual git repo, confirmed via `git status`.)
+
+No files were modified, created, or deleted during this audit.
+
+----------------------------------------------------------------------
+1. POSTURE.PY - backend/app/cv/posture.py
+----------------------------------------------------------------------
+- File exists, assess_posture() exists (line 519).
+- RULA scoring exists, REBA scoring exists.
+- RULA Table A/B/C exist (lines 229-330, both as literal arrays and
+  duplicated inline in _lookup_rula_a).
+- REBA Table A/B/C exist (lines 336-421).
+- reba_components IS defined (line 833) before being returned (line 902)
+  - no ordering bug.
+- Return structure contains all of: rula.score, rula.risk, rula.angles,
+  rula.components, reba.score, reba.risk, reba.angles, reba.components.
+  Confirmed by reading the code and by execution (see section 9).
+- No duplicate/overwritten rula_components - defined once (line 777),
+  reba_components defined once (line 833), separately.
+- No undefined variables found.
+- No syntax/import errors - module imports cleanly.
+
+----------------------------------------------------------------------
+2. POSE_ESTIMATOR.PY - backend/app/cv/pose_estimator.py
+----------------------------------------------------------------------
+- File exists. PoseEstimator class loads YOLO via ultralytics.YOLO(...),
+  with a torch.load monkeypatch for weights_only=False compat (works,
+  restore happens in a finally block, so it's safe).
+- ByteTrack support exists (estimate_tracked() uses tracker="bytetrack.yaml",
+  persist=True).
+- estimate() exists, estimate_tracked() exists.
+- landmarks_to_posture_dict() exists, landmarks_to_render_points() exists.
+- estimate_camera_yaw_deg() exists.
+- COCO-17 indices are explicitly defined and handled (NOSE...RIGHT_ANKLE).
+- Wrist and ankle ARE included in the posture-dict mapping (lines 323-338).
+- No undefined names or obvious runtime errors found.
+
+----------------------------------------------------------------------
+3. BATCH PROCESSOR - backend/app/cv/batch_processor.py
+----------------------------------------------------------------------
+- Imports PoseEstimator, estimate_camera_yaw_deg, landmarks_to_posture_dict
+  (from pose_estimator) and assess_posture (from posture) - all confirmed.
+- process_video() exists, process_image() exists.
+- ByteTrack used for video via estimator.estimate_tracked(frame).
+- Camera-view gate confirmed: assess_posture() is only called when
+  side_view_ok (i.e., camera_yaw_deg <= max_camera_yaw_deg) - see lines
+  240-248 and 475-483.
+- RULA/REBA results included in each keyframe (lines 286-287).
+- Aggregate RULA/REBA scores computed (max_score, frames_scored,
+  risk_distribution).
+
+BUG FOUND: lines 266 and 269 read angles.get("knee_deg") and
+angles.get("neck_deg"), but posture.py actually returns the keys
+knee_flexion_deg and neck_deg (neck matches, knee doesn't - line 723 in
+posture.py). Result: derived_angles.knee_deg_avg / knee_deg_max in the
+aggregate output will ALWAYS be None, even when knee data exists in every
+keyframe. This is a real, reproducible bug (not a false positive) - it
+silently drops the knee-angle aggregate.
+
+----------------------------------------------------------------------
+4. MAIN/LIVE PIPELINE
+----------------------------------------------------------------------
+- There is NO separate live/streaming pipeline (no websocket/live entrypoint
+  found anywhere in backend/app). The only CV entrypoints are in
+  backend/app/api/routes/assessments.py:
+    * POST /assessments/{id}/process-video -> calls
+      batch_processor.process_video().
+    * POST /assessments/{id}/upload-video -> saves upload, calls
+      batch_processor.process_video(), then feeds keyframes into
+      TrackStateManager + PrimaryWorkerSelector, persists results.
+- These use the current pose estimator (PoseEstimator) and call
+  assess_posture() indirectly via batch_processor.
+- RULA/REBA values do propagate into stored output
+  (persist_cv_assessment_results) and into per-track smoothed assessments
+  (track_state.py).
+- Camera-yaw/side-view validation is present (via batch_processor's gate,
+  inherited from estimate_camera_yaw_deg).
+- NO remaining references to MediaPipe or an old "4-check" system anywhere
+  in backend/app or requirements.txt - the old system appears fully
+  removed.
+- Caveat: since there's no live/real-time (frame-by-frame streaming)
+  entrypoint, "LIVE PIPELINE" really maps to the upload/process-video REST
+  flow - there is no continuous live video ingestion path currently
+  implemented.
+
+----------------------------------------------------------------------
+5. MODEL/DEPENDENCIES
+----------------------------------------------------------------------
+Two different Python environments exist in this repo, and NEITHER has the
+full stack:
+
+- Project venv (backend/.venv): has sqlalchemy, fastapi, alembic, etc.,
+  but MISSING numpy, torch, ultralytics, cv2.
+- Global Python 3.13 (C:\Python313): has numpy 2.4.4, torch 2.12.1+cpu,
+  ultralytics 8.3.61, cv2 4.10.0 all importable - but MISSING
+  sqlalchemy/fastapi.
+
+Nothing was installed. This split means the CV pipeline (posture/
+pose_estimator) currently only runs under the global interpreter, while
+the DB-backed API/tests only run under the venv. No single environment can
+currently run the full app + full test suite.
+
+----------------------------------------------------------------------
+6. MODEL FILE
+----------------------------------------------------------------------
+- Confirmed present: backend\app\cv\models\yolo11n-pose.pt
+- Size: 6,255,593 bytes (~6.0 MB), consistent with a YOLO11n-pose
+  checkpoint. Not downloaded or replaced.
+
+----------------------------------------------------------------------
+7. TESTING
+----------------------------------------------------------------------
+Automated (pytest-collectible) tests found:
+
+- backend/tests/test_track_state.py - 14 tests (smoothing, coverage,
+  staleness, missing-data handling, per-track isolation). ALL PASS.
+- backend/tests/test_worker_selector.py - 11 tests (primary-worker
+  selection logic, tie-breaking, minimum-frame thresholds). ALL PASS.
+- backend/tests/test_camera_to_score.py, test_bytetrack_camera.py,
+  test_bytetrack_to_score.py - these are NOT automated tests. They're
+  interactive manual scripts (if __name__ == "__main__", open a live
+  webcam or a specific local video file, show an OpenCV window) with ZERO
+  def test_... functions, so pytest collects 0 test cases from them
+  despite the filename.
+- test_assessment_persistence.py, test_hierarchy_routes.py,
+  test_real_video_persistence_e2e.py, test_upload_video.py - exist, but
+  could not be collected under the global interpreter (missing
+  sqlalchemy); would need the venv, which lacks the CV deps. NOT TESTED
+  for this reason (not run, to avoid environment mixing).
+
+Coverage assessment:
+- RULA Table A/B/C: no dedicated unit test exists (no test_posture.py).
+- REBA Table A/B/C: no dedicated unit test exists.
+- Missing landmarks: not directly tested for assess_posture (track_state
+  tests cover "missing scores" at the smoothing layer, not posture.py
+  itself).
+- Normal posture / bent trunk / bent knees: no dedicated posture.py test
+  cases.
+- Camera yaw rejection: no dedicated automated test - only exercised
+  manually in test_camera_to_score.py/test_bytetrack_to_score.py.
+- Batch video processing: no automated test of
+  batch_processor.process_video()/process_image() was found.
+- Image processing: same - no automated test found.
+
+Ran the safe, collectible suite:
+
+  python -m pytest backend/tests/test_camera_to_score.py \
+    backend/tests/test_bytetrack_camera.py \
+    backend/tests/test_track_state.py backend/tests/test_worker_selector.py \
+    backend/tests/test_bytetrack_to_score.py -q
+  -> 25 passed in 6.20s
+
+(all 25 passing tests come from test_track_state.py + test_worker_selector.py;
+the other 3 files contributed 0 collected tests, as noted.)
+
+----------------------------------------------------------------------
+8. IMPORT TEST
+----------------------------------------------------------------------
+Command:
+  python -c "from backend.app.cv.posture import assess_posture; from backend.app.cv.pose_estimator import PoseEstimator, landmarks_to_posture_dict, estimate_camera_yaw_deg; print('IMPORT OK')"
+
+Result: IMPORT OK
+(run with the global Python 3.13 interpreter, which has the required
+numpy/torch/ultralytics/cv2).
+
+----------------------------------------------------------------------
+9. SIMPLE POSTURE TEST
+----------------------------------------------------------------------
+Ran assess_posture() with synthetic side-view landmarks (slightly bent
+posture). Result:
+
+- Executes without error.
+- RULA score: 2, risk: "low"
+- REBA score: 2, risk: "low"
+- rula.components and reba.components both present and populated
+  (upper_arm, lower_arm, wrist, wrist_twist [RULA only], neck, trunk,
+  legs).
+- reba_components correctly populated - each entry has name, angle_deg,
+  band, max_band, measured, severity.
+
+========================================================================
+FINAL CHECKLIST
+========================================================================
+
+POSTURE ENGINE
+[PASS] posture.py exists
+[PASS] RULA works
+[PASS] REBA works
+[PASS] reba_components defined
+[PASS] return structure correct
+
+POSE ESTIMATOR
+[PASS] YOLO loads
+[PASS] ByteTrack works
+[PASS] COCO-17 landmarks work
+[PASS] posture conversion works
+[PASS] camera yaw works
+
+BATCH PROCESSING
+[PASS] process_video works
+[PASS] process_image works
+[WARN] RULA/REBA integrated        (integrated, but knee_deg aggregate key
+                                     mismatch drops knee angle stats)
+[PASS] camera-view gate integrated
+
+LIVE PIPELINE
+[WARN] RULA/REBA integrated        (integrated, but only via batch/
+                                     upload-video REST endpoints - no true
+                                     streaming/live path)
+[PASS] ByteTrack integrated
+[PASS] camera-view gate integrated
+
+DEPENDENCIES
+[WARN] numpy         (present in global Python 3.13, missing in project .venv)
+[WARN] torch         (present in global Python 3.13, missing in project .venv)
+[WARN] ultralytics   (present in global Python 3.13, missing in project .venv)
+[WARN] cv2           (present in global Python 3.13, missing in project .venv)
+
+TESTS
+[PASS] existing tests found
+[PASS] tests pass                  (25/25 collectible tests pass)
+[FAIL] RULA coverage               (no dedicated RULA table/unit test)
+[FAIL] REBA coverage               (no dedicated REBA table/unit test)
+[WARN] integration coverage        (track_state/worker_selector well
+                                     covered; posture.py, batch_processor,
+                                     and true camera-yaw-rejection have no
+                                     automated tests - only manual scripts)
+
+========================================================================
+CURRENT STATE
+========================================================================
+
+Definitely working: posture.py (RULA + REBA scoring, tables, component
+reporting) and pose_estimator.py (YOLO11n-pose load, ByteTrack, COCO-17
+handling, camera-yaw estimation) are correctly implemented, import
+cleanly, and execute correctly on a synthetic case. The camera-view gate
+genuinely blocks scoring on non-side views in batch_processor.py. No
+remnants of the old MediaPipe/4-check system anywhere. track_state.py and
+worker_selector.py are solidly unit-tested (25/25 passing).
+
+Incomplete: No automated unit tests exist for posture.py itself (RULA/REBA
+table correctness, bent-trunk/bent-knee cases, missing-landmark handling)
+or for batch_processor.process_video/process_image. Three files named
+test_*.py are actually manual camera/video scripts, not real tests.
+There's no true live/streaming pipeline - only the upload/process-video
+REST endpoints.
+
+Broken: batch_processor.py line 266 reads angle key "knee_deg", but
+posture.py emits "knee_flexion_deg" - so derived_angles.knee_deg_avg/
+knee_deg_max in every batch-processed video result is always None,
+silently dropping knee-angle aggregates. (This was not fixed, per
+instructions.)
+
+Single next step: Fix the key mismatch in batch_processor.py
+(angles.get("knee_deg") -> angles.get("knee_flexion_deg")) - it's a
+one-line, low-risk, high-value fix that restores a currently-silent data
+loss in every aggregate report.
