@@ -13,10 +13,10 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MeasurementSource = Literal["vigilex_android", "ergoex_sensor"]
-AssessmentStatus = Literal["draft", "in_progress", "completed"]
+AssessmentStatus = Literal["draft", "in_progress", "completed", "failed"]
 LoadSource = Literal["measured", "prompted", "default"]
 ScoreMethod = Literal["REBA", "RULA", "NIOSH"]
 InterventionPriority = Literal["low", "medium", "high"]
@@ -201,14 +201,32 @@ class ProcessVideoPayload(BaseModel):
     requested_track_id: int | None = None
 
 
+# Keys that would reveal where the server stores files.
+PRIVATE_METADATA_KEYS = frozenset({"stored_path", "stored_filename"})
+
+
+def public_metadata(value: Any) -> Any:
+    """Copy of a metadata payload without server storage details, at any depth."""
+    if isinstance(value, dict):
+        return {k: public_metadata(v) for k, v in value.items() if k not in PRIVATE_METADATA_KEYS}
+    if isinstance(value, list):
+        return [public_metadata(v) for v in value]
+    return value
+
+
 class AssessmentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
+    @field_validator("capture_metadata", mode="after")
+    @classmethod
+    def _hide_storage(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return public_metadata(value)
+
     id: uuid.UUID
-    organization_id: uuid.UUID
-    site_id: uuid.UUID
-    area_id: uuid.UUID
-    task_id: uuid.UUID
+    organization_id: uuid.UUID | None
+    site_id: uuid.UUID | None
+    area_id: uuid.UUID | None
+    task_id: uuid.UUID | None
     worker_id: uuid.UUID | None
     assessor_id: uuid.UUID | None
     status: AssessmentStatus

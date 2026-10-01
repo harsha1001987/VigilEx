@@ -60,3 +60,17 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
     debugImplementation(libs.androidx.compose.ui.tooling)
 }
+// A physical phone cannot use the emulator's 10.0.2.2 alias. After every debug build,
+// forward the phone's localhost:8000 to this computer's port 8000 (FastAPI) over USB,
+// which is what ApiConfig.USB_REVERSE_BASE_URL relies on. Harmless when no device is
+// attached: the exit code is ignored. Run it by hand with ./gradlew adbReverseDevServer.
+val adbReverseDevServer = tasks.register<Exec>("adbReverseDevServer") {
+    group = "vigilex"
+    description = "Forwards tcp:8000 on the connected phone to tcp:8000 on this computer."
+    executable = androidComponents.sdkComponents.adb.get().asFile.absolutePath
+    args("reverse", "tcp:8000", "tcp:8000")
+    isIgnoreExitValue = true
+}
+tasks.matching { it.name == "assembleDebug" || it.name == "installDebug" }.configureEach {
+    finalizedBy(adbReverseDevServer)
+}

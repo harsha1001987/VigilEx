@@ -26,7 +26,7 @@ object NetworkModule {
         .build()
 
     private val retrofit = Retrofit.Builder()
-        .baseUrl(ApiConfig.BASE_URL)
+        .baseUrl(ApiConfig.EMULATOR_BASE_URL) // Legacy CRUD APIs; analysis uses the configured server.
         .client(okHttpClient)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()
@@ -35,4 +35,25 @@ object NetworkModule {
     val areaApi: AreaApi = retrofit.create(AreaApi::class.java)
     val taskApi: TaskApi = retrofit.create(TaskApi::class.java)
     val assessmentApi: AssessmentApi = retrofit.create(AssessmentApi::class.java)
+
+    // Video analysis runs YOLO + ByteTrack before responding, which can take
+    // minutes for longer clips, so it needs far longer timeouts than CRUD calls.
+    // Retries are disabled so a dropped connection never uploads a video twice.
+    private val analysisClient = okHttpClient.newBuilder()
+        .writeTimeout(5, TimeUnit.MINUTES)
+        .readTimeout(15, TimeUnit.MINUTES)
+        .retryOnConnectionFailure(false)
+        .build()
+
+    private val analysisApis = mutableMapOf<String, AnalysisApi>()
+
+    /** The base URL is user-configurable (Settings), so APIs are built per URL. */
+    @Synchronized
+    fun analysisApi(baseUrl: String): AnalysisApi = analysisApis.getOrPut(baseUrl) {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(analysisClient)
+            .build()
+            .create(AnalysisApi::class.java)
+    }
 }

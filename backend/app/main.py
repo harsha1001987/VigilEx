@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import areas, assessments, cv_analysis, health, organizations, sites, tasks
+from app.api.routes import areas, assessments, cv_analysis, health, organizations, overview, sites, tasks
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -24,6 +24,7 @@ app.include_router(areas.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
 app.include_router(assessments.router, prefix="/api/v1")
 app.include_router(cv_analysis.router, prefix="/api/v1")
+app.include_router(overview.router, prefix="/api/v1")
 
 
 @app.get("/")

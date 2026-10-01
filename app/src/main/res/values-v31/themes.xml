@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Android 12+ always shows a system splash; make it the same plain yellow field with no icon. -->
+    <style name="Theme.VigilEx" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/vigilex_yellow</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowSplashScreenBackground">@color/vigilex_yellow</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
+    </style>
+</resources>

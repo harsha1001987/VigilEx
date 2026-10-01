@@ -1,48 +1,35 @@
 package com.extrive.vigilex.ui.theme
 
-import android.app.Activity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
 
-private val LightColorScheme = lightColorScheme(
-    primary = VigilExYellow,
-    onPrimary = OnYellow,
-    secondary = TextSecondary,
-    onSecondary = BackgroundWhite,
-    tertiary = TextMuted,
-    onTertiary = BackgroundWhite,
-    background = BackgroundWhite,
-    onBackground = TextPrimary,
-    surface = BackgroundWhite,
-    onSurface = TextPrimary,
-    surfaceVariant = SurfaceSubtle,
-    onSurfaceVariant = TextSecondary,
-    outline = DividerColor,
-    outlineVariant = DividerColor,
-    error = RiskRed,
-    onError = BackgroundWhite
+private val VigilExColors = lightColorScheme(
+    primary = Yellow,
+    onPrimary = Black,
+    primaryContainer = Yellow,
+    onPrimaryContainer = Black,
+    secondary = Charcoal,
+    onSecondary = White,
+    tertiary = Gold,
+    onTertiary = Black,
+    background = Canvas,
+    onBackground = Ink,
+    surface = Surface,
+    onSurface = Ink,
+    surfaceVariant = SurfaceSunken,
+    onSurfaceVariant = InkSecondary,
+    surfaceContainerHigh = Surface,
+    outline = HairlineStrong,
+    outlineVariant = Hairline,
+    error = Red,
+    onError = White
 )
 
 @Composable
-fun VigilExTheme(
-    content: @Composable () -> Unit
-) {
-    val colorScheme = LightColorScheme
-    val view = LocalView.current
-    if (!view.isInEditMode) {
-        SideEffect {
-            val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.background.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = true
-        }
-    }
+fun VigilExTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = VigilExColors,
         typography = Typography,
         content = content
     )

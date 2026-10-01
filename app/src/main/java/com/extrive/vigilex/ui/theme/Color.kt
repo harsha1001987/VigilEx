@@ -2,28 +2,39 @@ package com.extrive.vigilex.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// VigilEx Brand
-val VigilExYellow = Color(0xFFF4C400)
-val OnYellow = Color(0xFF111111)
-val YellowSurface = Color(0xFFFFF8D9)
+// Brand
+val Yellow = Color(0xFFFFD21F)
+val Black = Color(0xFF0A0A0A)
+val Charcoal = Color(0xFF171717)
+val DarkCharcoal = Color(0xFF242424)
+val White = Color(0xFFFFFFFF)
+val OffWhite = Color(0xFFF6F6F3)
+val Gold = Color(0xFFC9A227)
+val Red = Color(0xFFC62828)
+val Green = Color(0xFF2E7D32)
 
-// Text
-val TextPrimary = Color(0xFF111111)
-val TextSecondary = Color(0xFF6B7280)
-val TextMuted = Color(0xFF9CA3AF)
+// Ink (text on light surfaces)
+val Ink = Black
+val InkSecondary = Color(0xFF55554F)
+val InkMuted = Color(0xFF8C8C85)
+val InkFaint = Color(0xFFB9B9B2)
 
-// Surfaces
-val BackgroundWhite = Color(0xFFFFFFFF)
-val SurfaceSubtle = Color(0xFFF8F8F7)
-val DividerColor = Color(0xFFE5E7EB)
-val BorderSubtle = Color(0xFFEDEDEB)
+// Ink on dark surfaces (navigation)
+val InkOnDark = White
+val InkOnDarkMuted = Color(0xFF8F8F8A)
 
-// Risk / status
-val RiskGreen = Color(0xFF22A06B)
-val RiskGreenSurface = Color(0xFFE7F5EE)
-val RiskOrange = Color(0xFFE88900)
-val RiskOrangeSurface = Color(0xFFFDF1E1)
-val RiskRed = Color(0xFFD64545)
-val RiskRedSurface = Color(0xFFFBEAEA)
-val RiskBlue = Color(0xFF4F7CAC)
-val RiskBlueSurface = Color(0xFFEAF0F6)
+// Structure
+val Canvas = OffWhite
+val Surface = White
+val SurfaceSunken = Color(0xFFEDEDE8)
+val Hairline = Color(0xFFE2E2DC)
+val HairlineStrong = Color(0xFFCBCBC4)
+
+// Gold darkened for text on light surfaces (Gold itself is below text contrast).
+val GoldInk = Color(0xFF7A5F00)
+val VeryHighRed = Color(0xFF8E1B1B)
+
+// Tints used behind semantic text; never used alone as decoration.
+val RedTint = Color(0xFFF8E6E5)
+val GoldTint = Color(0xFFF6EFD6)
+val GreenTint = Color(0xFFE5F0E5)

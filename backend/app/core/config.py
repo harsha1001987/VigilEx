@@ -4,13 +4,19 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # Absolute path so the settings load whatever the working directory is.
+    model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "VigilEx API"
     database_url: str
     cors_origins: str = "http://localhost:8000,http://127.0.0.1:8000"
     upload_dir: str = "uploads"
+    # Generated PDF reports, one per assessment, served only through the API.
+    report_dir: str = "reports"
     max_upload_size_bytes: int = 100 * 1024 * 1024  # 100 MB
 
     @property

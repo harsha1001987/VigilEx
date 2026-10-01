@@ -6,113 +6,187 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-private val Sans = FontFamily.Default
+private val Sans = FontFamily.SansSerif
 
-val Typography = Typography(
-    displayLarge = TextStyle(
+// Tabular figures keep columns of numbers aligned.
+private const val TABULAR = "tnum"
+
+/**
+ * VigilEx type roles. Numbers are the primary visual tool, so they get their
+ * own scale; labels are small, uppercase and tracked; prose stays sentence case.
+ */
+object VxType {
+    val splash = TextStyle(
         fontFamily = Sans,
-        fontWeight = FontWeight.Bold,
-        fontSize = 56.sp,
-        lineHeight = 60.sp,
-        letterSpacing = (-2).sp
-    ),
-    displayMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Bold,
-        fontSize = 40.sp,
-        lineHeight = 44.sp,
-        letterSpacing = (-1.2).sp
-    ),
-    displaySmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Bold,
-        fontSize = 32.sp,
-        lineHeight = 36.sp,
-        letterSpacing = (-0.8).sp
-    ),
-    headlineLarge = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Bold,
-        fontSize = 30.sp,
-        lineHeight = 36.sp,
-        letterSpacing = (-0.6).sp
-    ),
-    headlineMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Medium,
         fontSize = 26.sp,
-        lineHeight = 32.sp,
-        letterSpacing = (-0.5).sp
-    ),
-    headlineSmall = TextStyle(
+        letterSpacing = 14.sp
+    )
+
+    val wordmark = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.Bold,
+        fontSize = 13.sp,
+        letterSpacing = 4.sp
+    )
+
+    val scoreHero = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 96.sp,
+        lineHeight = 96.sp,
+        letterSpacing = (-4).sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    val scoreLarge = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 64.sp,
+        lineHeight = 64.sp,
+        letterSpacing = (-2.5).sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    val scoreScale = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Normal,
+        fontSize = 20.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    /** The assessment conclusion ("MODERATE"): the largest words in the app after the splash. */
+    val riskHeadline = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 72.sp,
+        lineHeight = 72.sp,
+        letterSpacing = (-3).sp
+    )
+
+    val riskHeadlineCompact = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 52.sp,
+        lineHeight = 54.sp,
+        letterSpacing = (-2).sp
+    )
+
+    /** Editorial figure for the key finding, e.g. "107.2°". */
+    val figure = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 56.sp,
+        lineHeight = 58.sp,
+        letterSpacing = (-2).sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    val metric = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 34.sp,
+        lineHeight = 38.sp,
+        letterSpacing = (-1).sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    val metricSmall = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
         fontSize = 22.sp,
-        lineHeight = 28.sp,
+        lineHeight = 26.sp,
+        letterSpacing = (-0.4).sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    val pageTitle = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 34.sp,
+        lineHeight = 40.sp,
+        letterSpacing = (-1.1).sp
+    )
+
+    val pageTitleCompact = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 28.sp,
+        lineHeight = 34.sp,
+        letterSpacing = (-0.8).sp
+    )
+
+    val sectionTitle = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 20.sp,
+        lineHeight = 26.sp,
         letterSpacing = (-0.3).sp
-    ),
-    titleLarge = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp,
-        lineHeight = 24.sp,
-        letterSpacing = (-0.1).sp
-    ),
-    titleMedium = TextStyle(
+    )
+
+    val title = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
-        lineHeight = 22.sp,
-        letterSpacing = 0.sp
-    ),
-    titleSmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.sp
-    ),
-    bodyLarge = TextStyle(
+        lineHeight = 22.sp
+    )
+
+    val body = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.Normal,
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
-        letterSpacing = 0.sp
-    ),
-    bodyMedium = TextStyle(
+        fontSize = 15.sp,
+        lineHeight = 23.sp
+    )
+
+    val bodySmall = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 21.sp,
-        letterSpacing = 0.sp
-    ),
-    bodySmall = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 17.sp,
-        letterSpacing = 0.sp
-    ),
-    labelLarge = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
-        lineHeight = 20.sp,
-        letterSpacing = 0.sp
-    ),
-    labelMedium = TextStyle(
-        fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 0.2.sp
-    ),
-    // Used for small uppercase eyebrow / overline labels
-    labelSmall = TextStyle(
+        fontSize = 13.sp,
+        lineHeight = 19.sp
+    )
+
+    val label = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 1.1.sp
+        letterSpacing = 1.4.sp
     )
+
+    val labelLarge = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 13.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 1.2.sp
+    )
+
+    val tableCell = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 15.sp,
+        lineHeight = 20.sp,
+        fontFeatureSettings = TABULAR
+    )
+
+    val mono = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Normal,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+        fontFeatureSettings = TABULAR
+    )
+}
+
+val Typography = Typography(
+    headlineLarge = VxType.pageTitle,
+    headlineMedium = VxType.pageTitleCompact,
+    titleLarge = VxType.sectionTitle,
+    titleMedium = VxType.title,
+    bodyLarge = VxType.body,
+    bodyMedium = VxType.bodySmall,
+    labelLarge = VxType.labelLarge,
+    labelSmall = VxType.label
 )

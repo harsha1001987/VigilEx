@@ -79,7 +79,9 @@ def test_processing_failure_is_handled_cleanly(monkeypatch):
     assert response.status_code == 500
     body = response.json()
     assert "detail" in body
-    assert "simulated pipeline failure" in body["detail"]
+    # Internal exception text is logged, never returned to the client.
+    assert "simulated pipeline failure" not in body["detail"]
+    assert body["detail"] == "Video processing failed."
 
 
 @pytest.mark.skipif(

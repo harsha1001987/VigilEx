@@ -6,8 +6,7 @@ import uuid
 from pathlib import Path
 from decimal import Decimal
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from app.db.database import SessionLocal
 
 from app.db.base import Base
 from app.models.organization import Organization
@@ -23,7 +22,6 @@ from app.cv.pose_estimator import landmarks_to_posture_dict
 from app.cv.posture import assess_posture
 from app.services.assessment_persistence import persist_cv_assessment_results
 
-POSTGRES_URL = "postgresql+psycopg://vigilex_user:vigilex_password@localhost:5432/vigilex"
 
 
 def test_real_video_pipeline_to_postgresql():
@@ -37,8 +35,7 @@ def test_real_video_pipeline_to_postgresql():
         pytest.skip(f"Video file not found at {video_path}")
 
     # Connect to real PostgreSQL database
-    engine = create_engine(POSTGRES_URL, echo=False)
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    # The test database configured by conftest.py.
     db = SessionLocal()
 
     try:

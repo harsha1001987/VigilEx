@@ -2,9 +2,14 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+import logging
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+
+from app.api.deps import get_current_user
 
 from app.core.config import get_settings
 from app.cv import batch_processor
@@ -26,14 +31,21 @@ from app.schemas.assessment import (
     CVPersistPayload,
     ProcessVideoPayload,
 )
+from app.schemas.analysis import AssessmentDetail, AssessmentPage, ReportMetadata
+from app.services import analysis_assessments as analyses
+from app.services import reports
 from app.services.assessment_persistence import persist_cv_assessment_results
 
 router = APIRouter(prefix="/assessments", tags=["assessments"])
 settings = get_settings()
+log = logging.getLogger("vigilex.assessments")
+
+MAX_PAGE = 100
 
 
-def _get_assessment_or_404(db: Session, assessment_id: uuid.UUID) -> Assessment:
-    assessment = db.get(Assessment, assessment_id)
+def _get_assessment_or_404(db: Session, assessment_id: uuid.UUID, owner: User | None = None) -> Assessment:
+    # Another owner's assessment is reported exactly like a missing one.
+    assessment = analyses.get_owned(db, assessment_id, owner)
     if assessment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessment not found")
     return assessment
@@ -124,7 +136,7 @@ def create_assessment(payload: AssessmentCreate, db: Session = Depends(get_db)) 
     return assessment
 
 
-@router.get("", response_model=list[AssessmentResponse])
+@router.get("", response_model=AssessmentPage)
 def list_assessments(
     organization_id: uuid.UUID | None = None,
     site_id: uuid.UUID | None = None,
@@ -132,37 +144,59 @@ def list_assessments(
     task_id: uuid.UUID | None = None,
     worker_id: uuid.UUID | None = None,
     assessor_id: uuid.UUID | None = None,
-    status: str | None = None,
+    status: str = Query("completed", description="Lifecycle status; history shows completed assessments."),
+    limit: int = Query(20, ge=1, le=MAX_PAGE),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-) -> list[Assessment]:
-    query = db.query(Assessment)
-    if organization_id is not None:
-        query = query.filter(Assessment.organization_id == organization_id)
-    if site_id is not None:
-        query = query.filter(Assessment.site_id == site_id)
-    if area_id is not None:
-        query = query.filter(Assessment.area_id == area_id)
-    if task_id is not None:
-        query = query.filter(Assessment.task_id == task_id)
-    if worker_id is not None:
-        query = query.filter(Assessment.worker_id == worker_id)
-    if assessor_id is not None:
-        query = query.filter(Assessment.assessor_id == assessor_id)
-    if status is not None:
-        query = query.filter(Assessment.status == status)
-    return list(query.order_by(Assessment.created_at).all())
+    owner: User | None = Depends(get_current_user),
+) -> AssessmentPage:
+    """Assessment history, newest first."""
+    analyses.expire_stale_analyses(db)
+    query = analyses.owned(owner).where(Assessment.status == status)
+    for column, value in (
+        (Assessment.organization_id, organization_id),
+        (Assessment.site_id, site_id),
+        (Assessment.area_id, area_id),
+        (Assessment.task_id, task_id),
+        (Assessment.worker_id, worker_id),
+        (Assessment.assessor_id, assessor_id),
+    ):
+        if value is not None:
+            query = query.where(column == value)
+
+    total = analyses.count_owned(db, query)
+    rows = db.scalars(
+        query.order_by(Assessment.created_at.desc(), Assessment.id)
+        .limit(limit)
+        .offset(offset)
+        .options(selectinload(Assessment.scores))
+    ).all()
+    return AssessmentPage(items=[analyses.summarize(a) for a in rows], total=total, limit=limit, offset=offset)
 
 
-@router.get("/{assessment_id}", response_model=AssessmentResponse)
-def get_assessment(assessment_id: uuid.UUID, db: Session = Depends(get_db)) -> Assessment:
-    return _get_assessment_or_404(db, assessment_id)
+@router.get("/{assessment_id}", response_model=AssessmentDetail)
+def get_assessment(
+    assessment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
+) -> AssessmentDetail:
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
+    return AssessmentDetail(
+        **AssessmentResponse.model_validate(assessment).model_dump(),
+        summary=analyses.summarize(assessment),
+        analysis=analyses.rebuild_analysis(assessment),
+        report_available=reports.stored_report(assessment) is not None,
+    )
 
 
 @router.put("/{assessment_id}", response_model=AssessmentResponse)
 def update_assessment(
-    assessment_id: uuid.UUID, payload: AssessmentUpdate, db: Session = Depends(get_db)
+    assessment_id: uuid.UUID,
+    payload: AssessmentUpdate,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
 ) -> Assessment:
-    assessment = _get_assessment_or_404(db, assessment_id)
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
     _validate_assessment_references(db, payload)
     for field, value in payload.model_dump().items():
         setattr(assessment, field, value)
@@ -172,24 +206,32 @@ def update_assessment(
 
 
 @router.delete("/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_assessment(assessment_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
-    assessment = _get_assessment_or_404(db, assessment_id)
+def delete_assessment(
+    assessment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
+) -> None:
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
     # assessment_scores / assessment_interventions are ON DELETE CASCADE at the
     # database level (see migration b7c3e1f9a2d4), so a single delete here is
     # sufficient - no app-level cascade logic needed.
     db.delete(assessment)
     db.commit()
+    reports.delete_report(assessment_id)
 
 
 @router.post("/{assessment_id}/results", response_model=AssessmentResponse)
 def submit_cv_results(
-    assessment_id: uuid.UUID, payload: CVPersistPayload, db: Session = Depends(get_db)
+    assessment_id: uuid.UUID,
+    payload: CVPersistPayload,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
 ) -> Assessment:
     """
     Persists CV batch processing results into PostgreSQL for an existing assessment.
     Updates assessment scores (RULA/REBA) and capture metadata.
     """
-    assessment = _get_assessment_or_404(db, assessment_id)
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
     return persist_cv_assessment_results(
         db,
         assessment,
@@ -200,13 +242,16 @@ def submit_cv_results(
 
 @router.post("/{assessment_id}/process-video", response_model=AssessmentResponse)
 def process_and_persist_video(
-    assessment_id: uuid.UUID, payload: ProcessVideoPayload, db: Session = Depends(get_db)
+    assessment_id: uuid.UUID,
+    payload: ProcessVideoPayload,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
 ) -> Assessment:
     """
     Runs the CV video processing pipeline (YOLO11n-Pose + ByteTrack -> RULA/REBA)
     on a video file and persists the resulting assessment into PostgreSQL.
     """
-    assessment = _get_assessment_or_404(db, assessment_id)
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
     cv_result = batch_processor.process_video(
         video_path=payload.video_path,
         stride_hz=payload.stride_hz,
@@ -226,6 +271,7 @@ def upload_and_process_video(
     stride_hz: float = Form(25.0),
     requested_track_id: int | None = Form(None),
     db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
 ) -> Assessment:
     """
     Accepts a multipart/form-data video upload from Android client or web client,
@@ -233,7 +279,7 @@ def upload_and_process_video(
     -> ByteTrack -> posture -> RULA/REBA -> PrimaryWorkerSelector), and persists
     the final assessment into PostgreSQL.
     """
-    assessment = _get_assessment_or_404(db, assessment_id)
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
 
     if not file or not file.filename:
         raise HTTPException(
@@ -272,12 +318,13 @@ def upload_and_process_video(
                 out_file.write(chunk)
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
+        log.exception("Could not store upload for %s", assessment_id)
         if saved_path.exists():
             saved_path.unlink()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to save uploaded video file: {str(e)}",
+            detail="Failed to save uploaded video file.",
         )
 
     if file_size == 0:
@@ -293,10 +340,11 @@ def upload_and_process_video(
             video_path=str(saved_path),
             stride_hz=stride_hz,
         )
-    except Exception as e:
+    except Exception:
+        log.exception("process_video failed for %s", assessment_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Video processing failed: {str(e)}",
+            detail="Video processing failed.",
         )
 
     upload_meta = {
@@ -336,3 +384,73 @@ def upload_and_process_video(
         cv_result=cv_result,
         primary_assessment=primary_assessment,
     )
+
+
+# ------------------------------------------------------------------ reports
+
+def _report_metadata(assessment: Assessment, content, path: Path) -> ReportMetadata:
+    stat = path.stat()
+    return ReportMetadata(
+        assessment_id=assessment.id,
+        status="ready",
+        generated_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+        file_name=reports.report_file_name(assessment),
+        size_bytes=stat.st_size,
+        download_url=f"/api/v1/assessments/{assessment.id}/report/pdf",
+        content=content,
+    )
+
+
+def _completed_or_400(assessment: Assessment) -> None:
+    if assessment.status != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reports can only be generated for completed assessments.",
+        )
+
+
+@router.post("/{assessment_id}/report", response_model=ReportMetadata, status_code=status.HTTP_201_CREATED)
+def generate_report(
+    assessment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
+) -> ReportMetadata:
+    """Generates (or regenerates) the PDF report from the stored assessment."""
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
+    _completed_or_400(assessment)
+    try:
+        content, path = reports.generate_report(assessment)
+    except Exception:
+        log.exception("Report generation failed for %s", assessment_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The report could not be generated.",
+        )
+    return _report_metadata(assessment, content, path)
+
+
+@router.get("/{assessment_id}/report", response_model=ReportMetadata)
+def get_report(
+    assessment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
+) -> ReportMetadata:
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
+    path = reports.stored_report(assessment)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report has not been generated.")
+    return _report_metadata(assessment, reports.build_report_content(assessment), path)
+
+
+@router.get("/{assessment_id}/report/pdf", response_class=FileResponse)
+def download_report(
+    assessment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    owner: User | None = Depends(get_current_user),
+) -> FileResponse:
+    """The generated PDF, for export or the platform share sheet."""
+    assessment = _get_assessment_or_404(db, assessment_id, owner)
+    path = reports.stored_report(assessment)
+    if path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report has not been generated.")
+    return FileResponse(path, media_type="application/pdf", filename=reports.report_file_name(assessment))

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
-ASSESSMENT_STATUSES = ("draft", "in_progress", "completed")
+ASSESSMENT_STATUSES = ("draft", "in_progress", "completed", "failed")
 LOAD_SOURCES = ("measured", "prompted", "default")
 
 
@@ -25,7 +25,7 @@ class Assessment(Base):
     __tablename__ = "assessments"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('draft', 'in_progress', 'completed')",
+            "status IN ('draft', 'in_progress', 'completed', 'failed')",
             name="ck_assessments_status",
         ),
         CheckConstraint(
@@ -45,18 +45,19 @@ class Assessment(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
-    # Context (derived hierarchy; not duplicated as text)
-    organization_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False, index=True
+    # Context (derived hierarchy; not duplicated as text). Optional: assessments
+    # created by the mobile app's analyze-video flow carry no hierarchy.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=True, index=True
     )
-    site_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sites.id"), nullable=False, index=True
+    site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sites.id"), nullable=True, index=True
     )
-    area_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("areas.id"), nullable=False, index=True
+    area_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("areas.id"), nullable=True, index=True
     )
-    task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=False, index=True
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=True, index=True
     )
 
     # People
@@ -69,7 +70,8 @@ class Assessment(Base):
     )
 
     # Lifecycle
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    # draft -> in_progress (analysis running) -> completed | failed
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft", index=True)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     # Computer-vision payloads (see app/schemas/assessment.py for the JSON contracts)
@@ -92,15 +94,15 @@ class Assessment(Base):
     consent_given: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     consent_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    organization: Mapped["Organization"] = relationship(back_populates="assessments")
-    site: Mapped["Site"] = relationship(back_populates="assessments")
-    area: Mapped["Area"] = relationship(back_populates="assessments")
-    task: Mapped["Task"] = relationship(back_populates="assessments")
+    organization: Mapped["Organization | None"] = relationship(back_populates="assessments")
+    site: Mapped["Site | None"] = relationship(back_populates="assessments")
+    area: Mapped["Area | None"] = relationship(back_populates="assessments")
+    task: Mapped["Task | None"] = relationship(back_populates="assessments")
     worker: Mapped["Worker | None"] = relationship(back_populates="assessments")
     assessor: Mapped["User | None"] = relationship(back_populates="assessments")
     scores: Mapped[list["AssessmentScore"]] = relationship(

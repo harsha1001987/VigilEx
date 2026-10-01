@@ -22,8 +22,12 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 target_metadata = Base.metadata
 
-# Load DATABASE_URL from the application settings (.env) instead of alembic.ini
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Load DATABASE_URL from the application settings (.env) instead of alembic.ini.
+# Callers (the test suite) may point a run at another database via attributes.
+config.set_main_option(
+    "sqlalchemy.url",
+    config.attributes.get("database_url") or get_settings().database_url,
+)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

@@ -8,8 +8,7 @@ from pathlib import Path
 from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from app.db.database import SessionLocal
 
 from app.main import app
 from app.db.base import Base
@@ -22,16 +21,14 @@ from app.models.task import Task
 from app.models.assessment import Assessment
 from app.models.assessment_score import AssessmentScore
 
-POSTGRES_URL = "postgresql+psycopg://vigilex_user:vigilex_password@localhost:5432/vigilex"
 settings = get_settings()
 
 
 @pytest.fixture
 def db_session():
     """Connects to real PostgreSQL database for integration tests."""
-    engine = create_engine(POSTGRES_URL, echo=False)
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    session = TestingSessionLocal()
+    # The test database configured by conftest.py.
+    session = SessionLocal()
 
     org = session.query(Organization).first()
     if not org:
@@ -185,8 +182,14 @@ def test_real_video_multipart_upload_e2e(db_session):
     assert reba["inputs"]["frames_observed"] == 144
     assert reba["inputs"]["coverage_pct"] == "100.0%"
 
-    # Verify uploaded file exists in backend/uploads/
+    # The response never reveals where the server stored the file...
     upload_info = res_data["capture_metadata"]["meta"]["upload"]
-    stored_path = Path(upload_info["stored_path"])
-    assert stored_path.exists()
-    assert stored_path.stat().st_size > 0
+    assert "stored_path" not in upload_info
+    assert "stored_filename" not in upload_info
+    assert upload_info["original_filename"] == "camera_recording.mp4"
+
+    # ...but the file was stored, as recorded in the database.
+    db_session.expire_all()
+    stored = db_session.get(Assessment, assessment_id).capture_metadata["meta"]["upload"]["stored_path"]
+    assert Path(stored).exists()
+    assert Path(stored).stat().st_size > 0

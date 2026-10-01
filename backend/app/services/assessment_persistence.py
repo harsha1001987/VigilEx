@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
+from app.cv.posture import _reba_risk_level, _rula_risk_level
 from app.models.assessment import Assessment
 from app.models.assessment_score import AssessmentScore
 from app.models.assessment_intervention import AssessmentIntervention
@@ -62,6 +63,8 @@ def persist_cv_assessment_results(
     assessment.keypoint_series = {
         "worker": worker_meta,
         "keyframes_count": len(keyframes_meta),
+        # Per-frame landmarks and RULA/REBA components: the posture evidence.
+        "keyframes": keyframes_meta,
         "primary_track": primary_assessment if primary_assessment else {},
     }
 
@@ -98,7 +101,8 @@ def persist_cv_assessment_results(
 
     rula_risk = rula_data.get("risk")
     if not rula_risk or rula_risk == "unknown":
-        rula_risk = cv_result.get("rula", {}).get("risk") or "unknown"
+        # process_video()'s summary carries no label; use the pipeline's own banding.
+        rula_risk = cv_result.get("rula", {}).get("risk") or _rula_risk_level(rula_score_val)
 
     valid_rula_frames = rula_data.get(
         "valid_frames",
@@ -153,7 +157,7 @@ def persist_cv_assessment_results(
 
     reba_risk = reba_data.get("risk")
     if not reba_risk or reba_risk == "unknown":
-        reba_risk = cv_result.get("reba", {}).get("risk") or "unknown"
+        reba_risk = cv_result.get("reba", {}).get("risk") or _reba_risk_level(reba_score_val)
 
     valid_reba_frames = reba_data.get(
         "valid_frames",
