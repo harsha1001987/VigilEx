@@ -1,10 +1,6 @@
 package com.extrive.vigilex.data.store
 
 import android.content.Context
-import com.extrive.vigilex.data.model.AnalysisJson
-import com.extrive.vigilex.data.model.AnalysisResult
-import com.extrive.vigilex.data.model.AssessmentRecord
-import com.extrive.vigilex.data.model.parseAnalysisResult
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,99 +8,90 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
 
 /**
- * Completed analyses saved on this device. The backend's analyze-video
- * endpoint is stateless, so this is the only record of past assessments:
- * an index of summaries plus the untouched server JSON for each assessment.
+ * Device-only state for backend assessments. The backend is the source of
+ * truth for every assessment; it does not keep the video, so this remembers
+ * which video on this device each assessment id was made from, letting
+ * evidence be drawn over the real frames. Nothing else is stored here.
+ *
+ * [revision] changes whenever assessments are added or removed, so screens
+ * showing backend data know to fetch it again.
  */
 object AssessmentStore {
     private const val DIR = "assessments"
-    private const val INDEX = "index.json"
+    // Lives beside index.json and <id>.json from when results were saved only on
+    // the device. Those are left untouched: the backend has no copy of them.
+    private const val VIDEOS = "videos.json"
 
-    private lateinit var dir: File
+    private var file: File? = null
     private val mutex = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val indexSerializer = ListSerializer(AssessmentRecord.serializer())
+    private val serializer = MapSerializer(String.serializer(), String.serializer())
+    private val json = Json { ignoreUnknownKeys = true }
 
-    private val _records = MutableStateFlow<List<AssessmentRecord>>(emptyList())
-    /** Newest first. */
-    val records: StateFlow<List<AssessmentRecord>> = _records.asStateFlow()
+    @Volatile private var videos: Map<String, String> = emptyMap()
 
-    private val _loaded = MutableStateFlow(false)
-    /** False until the index has been read, so screens don't flash an empty state. */
-    val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
+    private val _revision = MutableStateFlow(0)
+    val revision: StateFlow<Int> = _revision.asStateFlow()
 
     fun init(context: Context) {
-        if (::dir.isInitialized) return
-        dir = File(context.applicationContext.filesDir, DIR).apply { mkdirs() }
-        scope.launch {
-            mutex.withLock { _records.value = readIndex() }
-            _loaded.value = true
-        }
+        if (file != null) return
+        val dir = File(context.applicationContext.filesDir, DIR).apply { mkdirs() }
+        file = File(dir, VIDEOS)
+        scope.launch { mutex.withLock { videos = read() } }
     }
 
-    suspend fun save(record: AssessmentRecord, rawJson: String) = withContext(Dispatchers.IO) {
+    /** content:// URI of the video [assessmentId] was analyzed from, if it came from this device. */
+    fun videoUri(assessmentId: String): String? = videos[assessmentId]
+
+    /** Records a new backend assessment made from a video on this device. */
+    suspend fun saved(assessmentId: String, videoUri: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
-            writeAtomically(File(dir, "${record.id}.json"), rawJson)
-            val updated = (listOf(record) + _records.value.filter { it.id != record.id })
-                .sortedByDescending { it.createdAtMillis }
-            writeIndex(updated)
-            _records.value = updated
+            videos = videos + (assessmentId to videoUri)
+            write()
         }
+        changed()
     }
 
-    suspend fun loadResult(id: String): AnalysisResult? = withContext(Dispatchers.IO) {
-        val file = File(dir, "$id.json")
-        if (!file.exists()) return@withContext null
-        try {
-            parseAnalysisResult(file.readText())
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    fun record(id: String): AssessmentRecord? = _records.value.firstOrNull { it.id == id }
-
-    suspend fun delete(id: String) = withContext(Dispatchers.IO) {
+    /** The assessment was deleted on the backend. */
+    suspend fun deleted(assessmentId: String) = withContext(Dispatchers.IO) {
         mutex.withLock {
-            File(dir, "$id.json").delete()
-            val updated = _records.value.filter { it.id != id }
-            writeIndex(updated)
-            _records.value = updated
+            videos = videos - assessmentId
+            write()
         }
+        changed()
     }
 
-    suspend fun clear() = withContext(Dispatchers.IO) {
+    /** Every assessment was deleted on the backend. */
+    suspend fun cleared() = withContext(Dispatchers.IO) {
         mutex.withLock {
-            dir.listFiles()?.forEach { it.delete() }
-            _records.value = emptyList()
+            videos = emptyMap()
+            write()
         }
+        changed()
     }
 
-    private fun readIndex(): List<AssessmentRecord> {
-        val file = File(dir, INDEX)
-        if (!file.exists()) return emptyList()
-        return try {
-            AnalysisJson.decodeFromString(indexSerializer, file.readText())
-                .sortedByDescending { it.createdAtMillis }
-        } catch (e: Exception) {
-            emptyList()
-        }
+    fun changed() = _revision.update { it + 1 }
+
+    private fun read(): Map<String, String> = try {
+        file?.takeIf { it.exists() }?.let { json.decodeFromString(serializer, it.readText()) }.orEmpty()
+    } catch (e: Exception) {
+        emptyMap()
     }
 
-    private fun writeIndex(records: List<AssessmentRecord>) {
-        writeAtomically(File(dir, INDEX), AnalysisJson.encodeToString(indexSerializer, records))
-    }
-
-    private fun writeAtomically(target: File, text: String) {
+    private fun write() {
+        val target = file ?: return
         val tmp = File(target.parentFile, "${target.name}.tmp")
-        tmp.writeText(text)
+        tmp.writeText(json.encodeToString(serializer, videos))
         if (!tmp.renameTo(target)) {
             target.delete()
             tmp.renameTo(target)

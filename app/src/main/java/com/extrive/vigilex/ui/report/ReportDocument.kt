@@ -16,25 +16,39 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.extrive.vigilex.data.insight.Interpretation
 import com.extrive.vigilex.data.model.AnalysisResult
 import com.extrive.vigilex.data.model.AssessmentRecord
-import com.extrive.vigilex.data.model.orderedDistribution
+import com.extrive.vigilex.data.model.ComponentTableDto
+import com.extrive.vigilex.data.model.MethodResultDto
+import com.extrive.vigilex.data.model.ReportContentDto
 import com.extrive.vigilex.data.model.riskName
+import com.extrive.vigilex.ui.components.COMPONENT_HEADING
+import com.extrive.vigilex.ui.components.CameraViewReliability
+import com.extrive.vigilex.ui.components.CellText
+import com.extrive.vigilex.ui.components.DataTable
 import com.extrive.vigilex.ui.components.EvidenceGallery
-import com.extrive.vigilex.ui.components.FindingRow
 import com.extrive.vigilex.ui.components.Hairline
 import com.extrive.vigilex.ui.components.LocalWindowClass
 import com.extrive.vigilex.ui.components.MeasurementsTable
-import com.extrive.vigilex.ui.components.MethodBreakdown
 import com.extrive.vigilex.ui.components.MethodLine
+import com.extrive.vigilex.ui.components.OtherActions
+import com.extrive.vigilex.ui.components.PRODUCT_SECTION
+import com.extrive.vigilex.ui.components.PriorityAction
+import com.extrive.vigilex.ui.components.ProductRecommendation
+import com.extrive.vigilex.ui.components.ReliabilityNotice
+import com.extrive.vigilex.ui.components.TECHNICAL_SECTION
+import com.extrive.vigilex.ui.components.TableColumn
 import com.extrive.vigilex.ui.components.WindowClass
 import com.extrive.vigilex.ui.components.accent
 import com.extrive.vigilex.ui.components.headlineColor
 import com.extrive.vigilex.ui.components.headlineText
+import com.extrive.vigilex.ui.format.EMPTY_VALUE
 import com.extrive.vigilex.ui.format.formatDateTime
+import com.extrive.vigilex.ui.format.formatDegrees
 import com.extrive.vigilex.ui.format.formatSeconds
 import com.extrive.vigilex.ui.theme.Border
 import com.extrive.vigilex.ui.theme.Hairline as HairlineColor
@@ -47,17 +61,29 @@ import com.extrive.vigilex.ui.theme.VxType
 
 /**
  * The report as a document: white paper on the canvas, a running head,
- * numbered sections with large numerals. Mirrors the exported PDF.
+ * numbered sections with large numerals, then the lettered technical
+ * appendix. Mirrors the server's PDF section for section; every finding,
+ * product suggestion, reliability notice and explanation is the report
+ * content the server built the PDF from ([content]).
  */
 @Composable
 fun ReportDocument(
     record: AssessmentRecord,
     result: AnalysisResult,
     interpretation: Interpretation,
+    content: ReportContentDto,
     modifier: Modifier = Modifier
 ) {
     val compact = LocalWindowClass.current == WindowClass.COMPACT
     val pad = if (compact) Space.lg else Space.xxl
+    val sections = content.sections.ifEmpty { reportSections(content.productRecommendations.isNotEmpty()) }
+    val reliability = content.measurementReliability
+    @Composable
+    fun Section(name: String, body: @Composable () -> Unit) {
+        val number = sections.indexOf(name)
+        if (number >= 0) DocSection("%02d".format(number + 1), name, content = body)
+    }
+
     Column(
         modifier
             .fillMaxWidth()
@@ -78,7 +104,8 @@ fun ReportDocument(
         MetaLine("Duration", formatSeconds(result.video?.durationSec))
         Spacer(Modifier.height(Space.xxl))
 
-        DocSection(1) {
+        // What was observed, in one glance, with its limitation beside it.
+        Section("Overall assessment") {
             Text("ERGONOMIC RISK", style = VxType.label, color = InkMuted)
             Spacer(Modifier.height(Space.xs))
             Text(
@@ -93,55 +120,48 @@ fun ReportDocument(
             Hairline()
             MethodLine(interpretation.reba)
             Hairline()
-            interpretation.observation?.let {
+            (content.actionSummary ?: interpretation.observation)?.let {
                 Spacer(Modifier.height(Space.lg))
-                Text("PRIMARY OBSERVATION", style = VxType.label, color = InkMuted)
-                Spacer(Modifier.height(Space.xs))
                 Text(it, style = VxType.body.copy(fontSize = 17.sp, lineHeight = 25.sp), color = Ink)
             }
-            interpretation.guidance?.let {
-                Spacer(Modifier.height(Space.xs))
-                Text(it, style = VxType.bodySmall, color = InkSecondary)
+            if (reliability?.limited == true) {
+                Spacer(Modifier.height(Space.lg))
+                ReliabilityNotice(reliability)
             }
         }
 
-        DocSection(2) {
-            Hairline(color = Ink)
-            if (interpretation.findings.isEmpty()) {
-                Text("No body region could be measured.", style = VxType.body, color = InkSecondary)
+        Section("Priority action") {
+            val primary = content.interventions.firstOrNull()
+            if (primary == null) {
+                Text("No body region was flagged often enough to need a specific action.", style = VxType.body, color = InkSecondary)
+            } else {
+                PriorityAction(primary)
             }
-            interpretation.findings.forEachIndexed { i, f -> FindingRow(i + 1, f) }
         }
 
-        DocSection(3) {
-            listOf(interpretation.rula, interpretation.reba).forEachIndexed { i, m ->
-                if (i > 0) Spacer(Modifier.height(Space.xl))
-                MethodBreakdown(m, peakTimeLabel = null)
-                val dist = orderedDistribution(m.method, m.distribution).filter { it.second > 0 }
-                if (dist.isNotEmpty()) {
-                    Spacer(Modifier.height(Space.xs))
-                    Text(
-                        "Frames by risk band: " + dist.joinToString(" · ") { "${riskName(it.first)} ${it.second}" } +
-                            " of ${m.framesScored} scored.",
-                        style = VxType.bodySmall,
-                        color = InkMuted
-                    )
-                }
-            }
-            Spacer(Modifier.height(Space.sm))
-            Text(
-                "Component scores are taken at the frame where each method reached its peak score.",
-                style = VxType.bodySmall,
-                color = InkMuted
-            )
+        content.productRecommendations.firstOrNull()?.let { product ->
+            Section(PRODUCT_SECTION) { ProductRecommendation(product) }
         }
 
-        DocSection(4) {
+        Section("Other actions") {
+            val others = content.interventions.drop(1)
+            if (others.isEmpty()) {
+                Text("No other body region needed action.", style = VxType.body, color = InkSecondary)
+            } else {
+                OtherActions(others)
+            }
+        }
+
+        Section("Measurements") {
             MeasurementsTable(interpretation.regions)
+            Spacer(Modifier.height(Space.xs))
+            Text(content.measurementNote, style = VxType.bodySmall, color = InkMuted)
         }
 
-        if (interpretation.evidence.isNotEmpty()) {
-            DocSection(5) {
+        Section("Posture evidence") {
+            if (interpretation.evidence.isEmpty()) {
+                Text("No scored frame is available to show.", style = VxType.body, color = InkSecondary)
+            } else {
                 EvidenceGallery(
                     evidence = interpretation.evidence,
                     keyframeCount = result.keyframes.size,
@@ -152,34 +172,92 @@ fun ReportDocument(
             }
         }
 
-        DocSection(6, last = true) {
-            Text(
-                "VigilEx detects the worker's pose in sampled video frames (YOLO11n-Pose), follows the same worker " +
-                    "through the video (ByteTrack) and measures joint angles in the side view. RULA and REBA are " +
-                    "scored per frame; this report gives the peak score of each.",
-                style = VxType.bodySmall,
-                color = InkSecondary
-            )
-            if (interpretation.unmeasured.isNotEmpty()) {
-                Spacer(Modifier.height(Space.xs))
-                Text(
-                    "Not observable from video: ${interpretation.unmeasured.joinToString(", ").lowercase()}, as well as " +
-                        "force, load, coupling and activity. These are scored at their lowest-risk values.",
-                    style = VxType.bodySmall,
-                    color = InkSecondary
-                )
-            }
+        Section("Camera view and reliability") {
+            reliability?.let { CameraViewReliability(it) }
+        }
+
+        // Technical appendix, for professional review.
+        DocSection("A", content.technicalSection.ifEmpty { TECHNICAL_SECTION }, last = true) {
+            Text("RULA / REBA SCORES", style = VxType.label, color = Ink)
             Spacer(Modifier.height(Space.xs))
+            listOf("RULA" to content.rula, "REBA" to content.reba).forEach { (method, r) ->
+                r?.let { MethodScoreLine(method, it) }
+            }
             Text(
-                "This report describes observed posture. It does not assess injury, pain, fatigue or health, " +
-                    "and findings should be reviewed by a qualified person.",
+                "Scores are the peak per-frame score reported by the VigilEx pipeline; band is the component's " +
+                    "score within its range.",
                 style = VxType.bodySmall,
-                color = InkSecondary
+                color = InkMuted
             )
-            result.methodologyVersion?.let {
+            if (content.componentTables.isNotEmpty()) {
+                Spacer(Modifier.height(Space.xl))
+                Text(COMPONENT_HEADING.uppercase(), style = VxType.label, color = Ink)
+                Spacer(Modifier.height(Space.xs))
+                Text(content.componentNote, style = VxType.bodySmall, color = Ink)
+                content.componentTables.forEach {
+                    Spacer(Modifier.height(Space.lg))
+                    ComponentTable(it)
+                }
+            }
+            Spacer(Modifier.height(Space.xl))
+            Text("METHODOLOGY", style = VxType.label, color = Ink)
+            content.methodology.forEach {
+                Spacer(Modifier.height(Space.xs))
+                Text(it, style = VxType.bodySmall, color = InkSecondary)
+            }
+            Spacer(Modifier.height(Space.lg))
+            Text("LIMITATIONS", style = VxType.label, color = Ink)
+            content.limitations.forEach {
+                Spacer(Modifier.height(Space.xs))
+                Text(it, style = VxType.bodySmall, color = InkSecondary)
+            }
+            content.methodologyVersion?.let {
                 Spacer(Modifier.height(Space.sm))
                 Text("Methodology: $it", style = VxType.mono, color = InkMuted)
             }
+        }
+    }
+}
+
+@Composable
+private fun MethodScoreLine(method: String, r: MethodResultDto) {
+    val dist = r.riskDistribution.filterValues { it > 0 }.entries.joinToString(", ") { "${riskName(it.key)} ${it.value}" }
+    Text(
+        "$method ${"%02d".format(r.score ?: 0)} / ${"%02d".format(r.scaleMax)} · ${riskName(r.risk)} risk. " +
+            "${r.framesScored} frames scored." + (if (dist.isNotEmpty()) " Frames by risk band: $dist." else ""),
+        style = VxType.bodySmall,
+        color = InkSecondary
+    )
+    Spacer(Modifier.height(Space.xs))
+}
+
+/** One method's components at its peak-score frame, exactly as the PDF lists them. */
+@Composable
+private fun ComponentTable(table: ComponentTableDto) {
+    val at = "frame ${table.frameNumber}" + (table.frameTimeSec?.let { " · ${formatSeconds(it)}" } ?: "")
+    Text(table.title, style = VxType.title, color = Ink)
+    Text(
+        "Score ${"%02d".format(table.score)} / ${"%02d".format(table.scaleMax)} · $at",
+        style = VxType.mono,
+        color = InkMuted
+    )
+    Spacer(Modifier.height(Space.xs))
+    DataTable(
+        columns = listOf(
+            TableColumn("Component", 1.6f),
+            TableColumn("Angle", 1f, TextAlign.End),
+            TableColumn("Band", 0.8f, TextAlign.End)
+        ),
+        rowCount = table.rows.size
+    ) { row, column ->
+        val c = table.rows[row]
+        when (column) {
+            0 -> CellText(c.name, strong = c.measured, muted = !c.measured)
+            1 -> CellText(if (c.measured) formatDegrees(c.angleDeg) else "Not observable", muted = !c.measured)
+            else -> CellText(
+                if (c.measured && c.band != null) "${c.band} / ${c.maxBand ?: EMPTY_VALUE}" else EMPTY_VALUE,
+                muted = !c.measured
+            )
         }
     }
 }
@@ -192,21 +270,21 @@ private fun MetaLine(label: String, value: String) {
     }
 }
 
-/** 01 / EXECUTIVE ASSESSMENT under a strong rule; large numeral, quiet title. */
+/** 01 / OVERALL ASSESSMENT under a strong rule; large numeral (or letter), quiet title. */
 @Composable
-private fun DocSection(number: Int, last: Boolean = false, content: @Composable () -> Unit) {
+private fun DocSection(mark: String, name: String, last: Boolean = false, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Hairline(color = Ink, modifier = Modifier.height(2.dp))
         Spacer(Modifier.height(Space.sm))
         Row(verticalAlignment = Alignment.Top) {
             Text(
-                "%02d".format(number),
+                mark,
                 style = VxType.figure.copy(fontSize = 40.sp, lineHeight = 42.sp),
                 color = Ink,
                 modifier = Modifier.width(72.dp)
             )
             Text(
-                ReportSections[number - 1].uppercase(),
+                name.uppercase(),
                 style = VxType.labelLarge,
                 color = Ink,
                 modifier = Modifier

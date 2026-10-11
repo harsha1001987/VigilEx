@@ -13,7 +13,7 @@ router = APIRouter(tags=["overview"])
 @router.get("/overview", response_model=OverviewResponse)
 def get_overview(
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> OverviewResponse:
     """Aggregates over completed assessments only. Empty database -> zero counts, empty lists."""
     analyses.expire_stale_analyses(db)

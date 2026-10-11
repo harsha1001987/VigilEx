@@ -6,9 +6,10 @@ import kotlinx.serialization.json.Json
 
 /**
  * Response of POST /api/v1/analyze-video, i.e. the dict produced by
- * backend/app/cv/batch_processor.process_video(). Field names mirror the
- * backend exactly; every field is optional so a partial response never
- * crashes the app.
+ * backend/app/cv/batch_processor.process_video(), plus the id it was saved
+ * under. GET /api/v1/assessments/{id} returns the same shape as `analysis`.
+ * Field names mirror the backend exactly; every field is optional so a
+ * partial response never crashes the app.
  */
 @Serializable
 data class AnalysisResult(
@@ -20,7 +21,9 @@ data class AnalysisResult(
     val rula: MethodSummary? = null,
     val reba: MethodSummary? = null,
     val keyframes: List<Keyframe> = emptyList(),
-    val meta: AnalysisMeta? = null
+    val meta: AnalysisMeta? = null,
+    /** Id of the backend assessment this result was saved as; null when the server could not save it. */
+    @SerialName("assessment_id") val assessmentId: String? = null
 )
 
 @Serializable

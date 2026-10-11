@@ -11,7 +11,7 @@ import com.extrive.vigilex.data.model.average
 import com.extrive.vigilex.data.model.componentOrder
 import com.extrive.vigilex.data.model.maximum
 import com.extrive.vigilex.data.model.score
-import com.extrive.vigilex.data.model.severityOf
+import com.extrive.vigilex.data.model.effectiveSeverity
 import com.extrive.vigilex.data.model.summary
 
 /*
@@ -172,7 +172,7 @@ private fun methodResult(result: AnalysisResult, method: Method): MethodResult {
                     band = c.band,
                     maxBand = c.maxBand,
                     measured = measured,
-                    severity = if (measured) severityOf(c.severity) else null
+                    severity = if (measured) c.effectiveSeverity() else null
                 )
             }
     }.orEmpty()
@@ -195,7 +195,7 @@ private fun methodResult(result: AnalysisResult, method: Method): MethodResult {
 private fun Keyframe.regionSeverity(metric: BodyMetric): Severity? =
     listOfNotNull(rula?.components?.get(metric.componentKey), reba?.components?.get(metric.componentKey))
         .filter { it.measured == true }
-        .mapNotNull { severityOf(it.severity) }
+        .mapNotNull { it.effectiveSeverity() }
         .maxOrNull()
 
 private fun Keyframe.angle(metric: BodyMetric): Double? =

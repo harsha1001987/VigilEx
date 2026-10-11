@@ -1,5 +1,6 @@
 package com.extrive.vigilex.data.api
 
+import com.extrive.vigilex.data.model.AnalysisJson
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -17,9 +18,14 @@ object NetworkModule {
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BASIC
+        // BASIC logs no headers; redacting keeps a token out of Logcat if the level is ever raised.
+        redactHeader(AuthInterceptor.HEADER)
     }
 
+    // The session token goes on every request to the server that issued it.
+    // The logger is added after it so it sees the final request.
     private val okHttpClient = OkHttpClient.Builder()
+        .addInterceptor(AuthInterceptor())
         .addInterceptor(loggingInterceptor)
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
@@ -34,7 +40,6 @@ object NetworkModule {
     val siteApi: SiteApi = retrofit.create(SiteApi::class.java)
     val areaApi: AreaApi = retrofit.create(AreaApi::class.java)
     val taskApi: TaskApi = retrofit.create(TaskApi::class.java)
-    val assessmentApi: AssessmentApi = retrofit.create(AssessmentApi::class.java)
 
     // Video analysis runs YOLO + ByteTrack before responding, which can take
     // minutes for longer clips, so it needs far longer timeouts than CRUD calls.
@@ -55,5 +60,36 @@ object NetworkModule {
             .client(analysisClient)
             .build()
             .create(AnalysisApi::class.java)
+    }
+
+    // Saved assessments, overview and reports. Report generation renders a PDF
+    // on the server, so reads get more time than the CRUD default.
+    private val assessmentClient = okHttpClient.newBuilder()
+        .readTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    private val assessmentApis = mutableMapOf<String, AssessmentApi>()
+    private val authApis = mutableMapOf<String, AuthApi>()
+
+    /** Accounts, on the configured server. */
+    @Synchronized
+    fun authApi(baseUrl: String): AuthApi = authApis.getOrPut(baseUrl) {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(AuthApi::class.java)
+    }
+
+    /** Same server as analysis (Settings → Developer options), built per URL. */
+    @Synchronized
+    fun assessmentApi(baseUrl: String): AssessmentApi = assessmentApis.getOrPut(baseUrl) {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(assessmentClient)
+            .addConverterFactory(AnalysisJson.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(AssessmentApi::class.java)
     }
 }

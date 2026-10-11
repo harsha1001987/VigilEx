@@ -45,7 +45,9 @@ enum class FailureReason {
     /** The server answered 200 but the body was not an analysis result. */
     BAD_RESPONSE,
     /** The local video could not be read. */
-    UNREADABLE_FILE
+    UNREADABLE_FILE,
+    /** The server refused the session (401); the app returns to sign-in. */
+    SIGNED_OUT
 }
 
 sealed interface AnalysisOutcome {
@@ -100,6 +102,7 @@ class AnalysisRepository(
             NetLog.i("ERROR: HTTP ${response.code()} ${detail ?: ""}")
             val reason = when (response.code()) {
                 400, 413, 415, 422 -> FailureReason.INVALID_VIDEO
+                401 -> FailureReason.SIGNED_OUT
                 // Something answered, but it is not the VigilEx analysis endpoint.
                 404, 405 -> FailureReason.UNREACHABLE
                 else -> FailureReason.ANALYSIS_FAILED

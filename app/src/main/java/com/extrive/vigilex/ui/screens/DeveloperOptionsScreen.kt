@@ -69,7 +69,8 @@ fun DeveloperOptionsScreen(onBack: () -> Unit) {
         Text(
             "The server that receives videos for analysis. Emulator: http://10.0.2.2:8000. Phone on USB: " +
                 "http://127.0.0.1:8000, forwarded to the computer by debug builds (adb reverse). Phone on " +
-                "Wi-Fi only: the computer's network address, e.g. http://192.168.1.20:8000.",
+                "Wi-Fi only: the computer's network address, e.g. http://192.168.1.20:8000. Accounts belong to " +
+                "a server, so changing it signs you out. Use HTTPS for any server outside your own network.",
             style = VxType.bodySmall,
             color = InkSecondary,
             modifier = Modifier.widthIn(max = 560.dp)

@@ -17,7 +17,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -46,12 +45,19 @@ import com.extrive.vigilex.data.model.Keyframe
 import com.extrive.vigilex.data.model.Method
 import com.extrive.vigilex.data.model.componentRows
 import com.extrive.vigilex.data.model.score
+import com.extrive.vigilex.data.api.ApiResult
+import com.extrive.vigilex.data.repository.AssessmentRepository
 import com.extrive.vigilex.data.store.AssessmentStore
+import com.extrive.vigilex.ui.components.BackendErrorState
+import com.extrive.vigilex.ui.components.COMPONENT_HEADING
+import com.extrive.vigilex.ui.components.COMPONENT_NOTE
+import com.extrive.vigilex.ui.components.CameraViewReliability
+import com.extrive.vigilex.ui.components.ReliabilityNotice
+import com.extrive.vigilex.ui.components.TECHNICAL_SECTION
 import com.extrive.vigilex.ui.components.ArrowLink
 import com.extrive.vigilex.ui.components.BottomActionBar
 import com.extrive.vigilex.ui.components.CellText
 import com.extrive.vigilex.ui.components.DataTable
-import com.extrive.vigilex.ui.components.EmptyState
 import com.extrive.vigilex.ui.components.EvidenceGallery
 import com.extrive.vigilex.ui.components.KeyValueTable
 import com.extrive.vigilex.ui.components.LoadingState
@@ -61,6 +67,7 @@ import com.extrive.vigilex.ui.components.MethodBreakdown
 import com.extrive.vigilex.ui.components.PageContainer
 import com.extrive.vigilex.ui.components.PoseEvidence
 import com.extrive.vigilex.ui.components.PrimaryButton
+import com.extrive.vigilex.ui.components.RecommendedActions
 import com.extrive.vigilex.ui.components.RiskBadge
 import com.extrive.vigilex.ui.components.RiskConclusion
 import com.extrive.vigilex.ui.components.RiskDistribution
@@ -93,30 +100,38 @@ private const val FRAME_DEBOUNCE_MS = 120L
 
 private sealed interface DetailLoad {
     data object Loading : DetailLoad
-    data object Missing : DetailLoad
-    data class Ready(val result: AnalysisResult, val interpretation: Interpretation) : DetailLoad
+    data class Failed(val error: ApiResult.Error) : DetailLoad
+    data class Ready(
+        val record: AssessmentRecord,
+        val result: AnalysisResult,
+        val interpretation: Interpretation
+    ) : DetailLoad
 }
 
 /**
  * The assessment, in two levels. Level one answers what VigilEx found, how
  * serious it is and what drives it. Level two (ASSESSMENT DETAIL) holds the
  * RULA/REBA breakdowns, frame-by-frame scores, capture quality and method.
+ * Everything shown is the assessment as stored on the backend.
  */
 @Composable
 fun AssessmentDetailScreen(id: String, onBack: () -> Unit, onGenerateReport: () -> Unit) {
-    val records by AssessmentStore.records.collectAsState()
-    val loaded by AssessmentStore.loaded.collectAsState()
-    val record = records.firstOrNull { it.id == id }
+    val repository = remember { AssessmentRepository() }
     val compact = LocalWindowClass.current == WindowClass.COMPACT
 
+    var attempt by remember(id) { mutableIntStateOf(0) }
     var load by remember(id) { mutableStateOf<DetailLoad>(DetailLoad.Loading) }
-    LaunchedEffect(id, loaded) {
-        if (!loaded) return@LaunchedEffect
-        load = AssessmentStore.loadResult(id)?.let { DetailLoad.Ready(it, interpret(it)) } ?: DetailLoad.Missing
+    LaunchedEffect(id, attempt) {
+        load = DetailLoad.Loading
+        load = when (val detail = repository.detail(id)) {
+            is ApiResult.Success -> DetailLoad.Ready(detail.data.record, detail.data.result, interpret(detail.data.result))
+            is ApiResult.Error -> DetailLoad.Failed(detail)
+        }
     }
 
     val scroll = rememberScrollState()
     val ready = load as? DetailLoad.Ready
+    val record = ready?.record
     var viewportTop by remember { mutableFloatStateOf(0f) }
     Box(Modifier.fillMaxSize().onGloballyPositioned { viewportTop = it.positionInRoot().y }) {
         PageContainer(scrollState = scroll) {
@@ -126,18 +141,21 @@ fun AssessmentDetailScreen(id: String, onBack: () -> Unit, onGenerateReport: () 
                 onBack = onBack
             )
             val current = load
-            when {
-                current is DetailLoad.Loading -> LoadingState()
-                current is DetailLoad.Missing || record == null -> EmptyState(
-                    title = "Assessment not found",
-                    body = "This assessment is not saved on this device. It may have been deleted."
+            when (current) {
+                DetailLoad.Loading -> LoadingState()
+                is DetailLoad.Failed -> BackendErrorState(
+                    current.error,
+                    onRetry = { attempt++ },
+                    notFoundTitle = "Assessment not found",
+                    notFoundMessage = "This assessment is not on the VigilEx server. It may have been deleted."
                 )
-                current is DetailLoad.Ready -> AssessmentContent(
-                    record = record,
+                is DetailLoad.Ready -> AssessmentContent(
+                    record = current.record,
                     result = current.result,
                     interpretation = current.interpretation,
                     scroll = scroll,
                     viewportTop = viewportTop,
+                    repository = repository,
                     onGenerateReport = onGenerateReport,
                     onDeleted = onBack
                 )
@@ -160,6 +178,7 @@ private fun AssessmentContent(
     interpretation: Interpretation,
     scroll: ScrollState,
     viewportTop: Float,
+    repository: AssessmentRepository,
     onGenerateReport: () -> Unit,
     onDeleted: () -> Unit
 ) {
@@ -168,6 +187,8 @@ private fun AssessmentContent(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     var confirmDelete by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
 
     // Anchors for "View RULA / REBA breakdown", stored as offsets within the scrolled content.
     var rulaAnchor by remember { mutableFloatStateOf(0f) }
@@ -192,12 +213,30 @@ private fun AssessmentContent(
         }
     }
 
+    // What to do, from the backend intervention engine: the priority action first,
+    // then the Extrive product to evaluate for it when the finding qualifies.
+    val actions: @Composable () -> Unit = {
+        if (record.interventions.isNotEmpty()) {
+            Spacer(Modifier.height(Space.xxl))
+            RecommendedActions(record.interventions, product = record.primaryProduct)
+        }
+    }
+    // Next to the findings, so no result is read without its camera-view limitation.
+    val reliabilityNotice: @Composable () -> Unit = {
+        if (record.measurementReliability?.limited == true) {
+            Spacer(Modifier.height(Space.xxl))
+            ReliabilityNotice(record.measurementReliability)
+        }
+    }
+
     // ---------------------------------------------------------- level one
     if (expanded) {
         // Conclusion and findings on the left, the evidence that supports them on the right.
         Row(horizontalArrangement = Arrangement.spacedBy(Space.xxl), verticalAlignment = Alignment.Top) {
             Column(Modifier.weight(1f)) {
                 RiskConclusion(interpretation)
+                actions()
+                reliabilityNotice()
                 Spacer(Modifier.height(Space.xxl))
                 WhatWeFound(interpretation.findings)
                 Spacer(Modifier.height(Space.xl))
@@ -207,6 +246,8 @@ private fun AssessmentContent(
         }
     } else {
         RiskConclusion(interpretation)
+        actions()
+        reliabilityNotice()
         Spacer(Modifier.height(Space.xxl))
         WhatWeFound(interpretation.findings)
         if (!compact) {
@@ -233,17 +274,26 @@ private fun AssessmentContent(
     MeasurementsTable(interpretation.regions)
     Spacer(Modifier.height(Space.sm))
     Text(
-        "Joint angles in degrees across the frames where each region was measured. " +
-            "Status reflects the RULA and REBA bands the region reached.",
+        "Average and peak joint angles across all analyzed frames in which each region was observable. " +
+            "Status reflects the RULA and REBA bands the region reached. Not measured means the region could " +
+            "not be observed; it is not evidence of low risk.",
         style = VxType.bodySmall,
         color = InkMuted
     )
+    record.measurementReliability?.let {
+        Spacer(Modifier.height(Space.xxl))
+        SectionLabel("Camera view and reliability")
+        CameraViewReliability(it)
+    }
     Spacer(Modifier.height(Space.huge))
 
     // ---------------------------------------------------------- level two
-    Text("ASSESSMENT DETAIL", style = VxType.label, color = InkMuted)
+    Text(TECHNICAL_SECTION.uppercase(), style = VxType.label, color = InkMuted)
     Spacer(Modifier.height(Space.xs))
     Text("How the scores were reached", style = VxType.pageTitleCompact, color = Ink)
+    Spacer(Modifier.height(Space.xl))
+    SectionLabel(COMPONENT_HEADING)
+    Text(COMPONENT_NOTE, style = VxType.bodySmall, color = InkSecondary)
     Spacer(Modifier.height(Space.xl))
 
     val peakLabel = { method: Method ->
@@ -303,9 +353,9 @@ private fun AssessmentContent(
     val methodBlock: @Composable () -> Unit = {
         SectionLabel("Methodology")
         Text(
-            "VigilEx detects the worker's pose in sampled video frames (YOLO11n-Pose), follows the same " +
-                "worker through the video (ByteTrack) and measures joint angles in the side view. RULA and " +
-                "REBA are scored per frame; the assessment reports the peak score of each.",
+            "VigilEx detects the worker's pose in sampled video frames (YOLO11n-Pose) and follows the same " +
+                "worker through the video (ByteTrack). Joint angles are measured from the detected 2D landmarks. " +
+                "RULA and REBA are scored per frame; the assessment reports the peak score of each.",
             style = VxType.bodySmall,
             color = InkSecondary
         )
@@ -314,7 +364,7 @@ private fun AssessmentContent(
             Text(
                 "Not observable from video: ${interpretation.unmeasured.joinToString(", ").lowercase()
                     .replaceFirstChar { it.uppercase() }}, as well as force, load, coupling and activity. " +
-                    "These are scored at their lowest-risk values.",
+                    "These are scored at their lowest-risk values. This is not evidence that they were low risk.",
                 style = VxType.bodySmall,
                 color = InkSecondary
             )
@@ -350,7 +400,16 @@ private fun AssessmentContent(
         ArrowLink("Generate report", onClick = onGenerateReport)
         Spacer(Modifier.height(Space.lg))
     }
-    SecondaryButton(text = "Delete assessment", onClick = { confirmDelete = true }, destructive = true)
+    SecondaryButton(
+        text = if (deleting) "Deleting…" else "Delete assessment",
+        onClick = { confirmDelete = true },
+        enabled = !deleting,
+        destructive = true
+    )
+    deleteError?.let {
+        Spacer(Modifier.height(Space.xs))
+        Text(it, style = VxType.bodySmall, color = Red)
+    }
 
     if (confirmDelete) {
         AlertDialog(
@@ -358,16 +417,26 @@ private fun AssessmentContent(
             title = { Text("Delete assessment?", style = VxType.sectionTitle) },
             text = {
                 Text(
-                    "This removes the saved result for ${record.fileName} from this device. The video itself is not deleted.",
+                    "This permanently removes the assessment of ${record.fileName} from VigilEx. The video itself is not deleted.",
                     style = VxType.body
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
+                    deleting = true
+                    deleteError = null
                     scope.launch {
-                        AssessmentStore.delete(record.id)
-                        onDeleted()
+                        when (val deletion = repository.delete(record.id)) {
+                            is ApiResult.Success -> {
+                                AssessmentStore.deleted(record.id)
+                                onDeleted()
+                            }
+                            is ApiResult.Error -> {
+                                deleting = false
+                                deleteError = "The assessment was not deleted. ${deletion.message}"
+                            }
+                        }
                     }
                 }) { Text("DELETE", style = VxType.labelLarge, color = Red) }
             },

@@ -1,0 +1,39 @@
+{
+  "_about": [
+    "Extrive intervention products that VigilEx may suggest for evaluation, keyed by product id.",
+    "Every text field must come from approved Extrive material listed in `sources`. Leave a field null",
+    "rather than guess: missing fields are reported as content gaps and the report uses restrained wording.",
+    "Numeric benefit claims (e.g. brochure strain, comfort and productivity percentages) are deliberately",
+    "not included: they come from a lab squat-lift study and a pilot that do not cover the forward-bending",
+    "postures VigilEx detects, and the EMG study is confidential. Add them only with approval and qualifications."
+  ],
+  "products": {
+    "backex": {
+      "name": "BackEX",
+      "maker": "Extrive Innovations",
+      "category": "Passive back-support exosuit",
+      "trigger": {
+        "area": "back",
+        "excluded_directions": ["backward"]
+      },
+      "intended_use": "BackEX is a passive back-support exosuit designed for repetitive lifting, forward bending and load-carrying tasks in industrial, warehousing, manufacturing and logistics work.",
+      "operating_principle": "It is a lightweight, fabric-based wearable with no batteries or motors. Elastic elements are tensioned as the wearer bends forward and return that stored energy as the trunk straightens, so part of the effort needed to control and reverse forward bending is shared by the suit instead of being carried by the lower-back muscles alone.",
+      "task_types": [
+        "Repeated or sustained forward bending",
+        "Repetitive lifting and lowering",
+        "Load carrying and material handling, such as warehouse picking, parcel loading and unloading, inventory movement, assembly-line lifting and fabrication work"
+      ],
+      "suitability": [
+        "Confirm the task involves the repeated or sustained forward bending BackEX is designed to support.",
+        "Have a qualified person check fit, comfort and freedom of movement with the worker before regular use.",
+        "Check that it can be worn with the clothing and protective equipment the task requires.",
+        "Run a trial period and gather the worker's feedback on comfort and acceptance."
+      ],
+      "evidence_note": "This report makes no claim about the size of any BackEX benefit. Evaluate whether it improves task comfort and work efficiency in your operating environment; Extrive can share its product evaluation material on request.",
+      "sources": [
+        "Extrive BackEX brochure (Brochure_Extrive_BackEX.pdf)",
+        "Extrive BackEx scientific validation report, section 2: the BackEx exosuit and its working principle (2025)"
+      ]
+    }
+  }
+}

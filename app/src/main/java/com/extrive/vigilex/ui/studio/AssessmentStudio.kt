@@ -8,7 +8,6 @@ import com.extrive.vigilex.data.media.InspectionResult
 import com.extrive.vigilex.data.media.SelectedVideo
 import com.extrive.vigilex.data.media.VideoInspector
 import com.extrive.vigilex.data.model.AnalysisResult
-import com.extrive.vigilex.data.model.AssessmentRecord
 import com.extrive.vigilex.data.model.isScoreable
 import com.extrive.vigilex.data.repository.AnalysisOutcome
 import com.extrive.vigilex.data.repository.AnalysisRepository
@@ -16,7 +15,6 @@ import com.extrive.vigilex.data.repository.FailureReason
 import com.extrive.vigilex.data.repository.VideoUpload
 import com.extrive.vigilex.data.settings.ServerSettings
 import com.extrive.vigilex.data.store.AssessmentStore
-import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -167,29 +165,26 @@ object AssessmentStudio {
         val result = outcome.result
         if (!result.isScoreable) return StudioState.Inconclusive(video, result)
 
-        val record = AssessmentRecord.from(
-            id = UUID.randomUUID().toString(),
-            createdAtMillis = System.currentTimeMillis(),
-            fileName = video.displayName,
-            fileSizeBytes = video.sizeBytes,
-            videoUri = video.uri.toString(),
-            result = result
-        )
-        return try {
-            AssessmentStore.save(record, outcome.rawJson)
-            StudioState.Completed(video, record.id, result)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            StudioState.Failed(
+        // The backend saved the assessment; its id is the assessment's identity everywhere.
+        val assessmentId = result.assessmentId
+            ?: return StudioState.Failed(
                 video,
                 StudioFailure(
                     title = "Result not saved",
-                    message = "The analysis finished but could not be saved on this device. Check free storage and try again.",
-                    canRetry = true
+                    message = "VigilEx analyzed the video, but the server could not save the assessment. Try again.",
+                    canRetry = true,
+                    developerDetail = "analyze-video returned assessment_id null; check GET /api/v1/health/db"
                 )
             )
+        try {
+            AssessmentStore.saved(assessmentId, video.uri.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Only the link to the local video is lost; the assessment itself is saved on the server.
+            AssessmentStore.changed()
         }
+        return StudioState.Completed(video, assessmentId, result)
     }
 
     private fun failureFor(failure: AnalysisOutcome.Failure, baseUrl: String): StudioFailure {
@@ -234,6 +229,12 @@ object AssessmentStudio {
                 title = "Analysis failed",
                 message = "VigilEx could not read the analysis result. Try again.",
                 canRetry = true,
+                developerDetail = technical
+            )
+            FailureReason.SIGNED_OUT -> StudioFailure(
+                title = "Signed out",
+                message = "Your session has expired. Sign in again, then analyze the video.",
+                canRetry = false,
                 developerDetail = technical
             )
             FailureReason.UNREADABLE_FILE -> StudioFailure(

@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import false, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.assessment import Assessment
@@ -35,14 +35,20 @@ from app.schemas.analysis import (
     RULA_MAX,
     AnalyzeFailure,
     AssessmentSummary,
+    BackPosture,
     CVAnalysisResult,
     ElevatedMeasurement,
+    Intervention,
+    MeasurementReliability,
     MethodResult,
     OverviewMethodStats,
     OverviewResponse,
+    ProductRecommendation,
     RegionMeasurement,
 )
 from app.services.assessment_persistence import persist_cv_assessment_results
+from app.services.interventions import action_summary, back_posture, build_interventions
+from app.services.products import product_recommendations
 
 log = logging.getLogger("vigilex.assessments")
 
@@ -154,11 +160,14 @@ def expire_stale_analyses(db: Session, now: datetime | None = None) -> int:
 # ------------------------------------------------------------------ ownership
 
 def owned(owner: User | None):
-    """Base query for assessments visible to `owner`. Without authentication, all of them."""
-    query = select(Assessment)
-    if owner is not None:
-        query = query.where(Assessment.assessor_id == owner.id)
-    return query
+    """Base query for assessments visible to `owner`: only the ones it created.
+
+    Without an owner nothing is visible, so an unauthenticated caller or an
+    unowned historical assessment can never be exposed to another account.
+    """
+    if owner is None:
+        return select(Assessment).where(false())
+    return select(Assessment).where(Assessment.assessor_id == owner.id)
 
 
 def get_owned(db: Session, assessment_id: uuid.UUID, owner: User | None) -> Assessment | None:
@@ -203,10 +212,86 @@ def video_name(assessment: Assessment) -> str | None:
     return upload.get("original_filename")
 
 
+def intervention_plan(
+    assessment: Assessment,
+    rula: MethodResult | None,
+    reba: MethodResult | None,
+) -> tuple[BackPosture | None, list[Intervention], str | None]:
+    """Back metric, interventions (most important first) and the one-line summary, from stored data."""
+    overall = overall_risk(rula, reba)
+    back = back_posture((assessment.keypoint_series or {}).get("keyframes", []), assessment.derived_angles)
+    interventions = build_interventions(region_measurements(assessment), overall, back)
+    return back, interventions, action_summary(overall, interventions, back)
+
+
+def products_for(interventions: list[Intervention], back: BackPosture | None) -> list[ProductRecommendation]:
+    return product_recommendations(interventions, back)
+
+
+# ------------------------------------------------------------------ measurement reliability
+
+VIEW_EXPLANATION = (
+    "Joint angles are estimated from 2D pose landmarks. They are most reliable when the worker is clearly visible "
+    "from a side view. Oblique, rear, frontal or partly hidden views can distort the estimated angles, especially "
+    "trunk lean, and may understate or overstate a posture."
+)
+LIMITED_TITLE = "Limited measurement reliability"
+RERECORD = (
+    "For a confident assessment, record a new video with the camera to the side of the worker and the whole body "
+    "in view. This assessment and its results are kept as recorded."
+)
+NOT_MEASURED_NOTE = (
+    "Not measured means the region could not be observed in any scored frame. It is not evidence that the "
+    "posture of that region was low risk."
+)
+# The worker must be detected in at least this share of sampled frames.
+MIN_DETECTION_SHARE = 0.5
+
+
+def _pct(fraction: float) -> str:
+    return f"{fraction * 100:.0f}%"
+
+
+def measurement_reliability(
+    assessment: Assessment,
+    back: BackPosture | None,
+    regions: list[RegionMeasurement] | None = None,
+) -> MeasurementReliability:
+    """Camera-view limitations, from this assessment's stored view angles and detection rate. No score changes."""
+    quality = (assessment.capture_metadata or {}).get("quality") or {}
+    detection = quality.get("detection_fraction")
+    regions = region_measurements(assessment) if regions is None else regions
+    reasons = []
+    if back is None:
+        reasons.append("The trunk could not be measured in any frame, so back posture is not assessed.")
+    elif back.view_limited:
+        reasons.append(
+            f"The camera was close to side-on in only {_pct(back.side_on_fraction)} of measured frames. "
+            "Trunk lean in particular may be larger or smaller than measured."
+        )
+    if detection is not None and detection < MIN_DETECTION_SHARE:
+        reasons.append(f"The worker was detected in only {_pct(detection)} of sampled frames.")
+    missing = [r.label.lower() for r in regions if r.peak_severity is None and r.metric != "trunk"]
+    if missing:
+        reasons.append(
+            f"Not measured: {', '.join(missing)}. This is not evidence that the posture there was low risk."
+        )
+    return MeasurementReliability(
+        status="limited" if reasons else "no_limitation_detected",
+        side_on_fraction=back.side_on_fraction if back else None,
+        detection_fraction=detection,
+        explanation=VIEW_EXPLANATION,
+        title=LIMITED_TITLE if reasons else None,
+        reasons=reasons,
+        recommendation=RERECORD if reasons else None,
+    )
+
+
 def summarize(assessment: Assessment) -> AssessmentSummary:
     rula = method_result(assessment, "RULA")
     reba = method_result(assessment, "REBA")
     video = (assessment.capture_metadata or {}).get("video") or {}
+    back, interventions, summary_text = intervention_plan(assessment, rula, reba)
     return AssessmentSummary(
         id=assessment.id,
         status=assessment.status,
@@ -218,6 +303,11 @@ def summarize(assessment: Assessment) -> AssessmentSummary:
         reba=reba,
         overall_risk=overall_risk(rula, reba),
         methodology_version=assessment.methodology_version,
+        derived_angles=assessment.derived_angles,
+        action_summary=summary_text,
+        interventions=interventions,
+        product_recommendations=products_for(interventions, back),
+        measurement_reliability=measurement_reliability(assessment, back) if assessment.status == "completed" else None,
     )
 
 
@@ -253,6 +343,19 @@ def rebuild_analysis(assessment: Assessment) -> dict[str, Any] | None:
     }
 
 
+# posture.py labels severity by band / max_band, which calls the lowest band of
+# short scales "moderate" (REBA neck 1/2, RULA neck 1/3) even for an upright
+# neck. The lowest band is the method's neutral range, so it reads as ok here.
+# Must match effectiveSeverity() in the app (AnalysisInsights.kt).
+LOWEST_BAND = 1
+
+
+def _component_rank(component: dict[str, Any]) -> int:
+    if component.get("band") == LOWEST_BAND:
+        return _SEVERITY_RANK["ok"]
+    return _SEVERITY_RANK[component["severity"]]
+
+
 def region_measurements(assessment: Assessment) -> list[RegionMeasurement]:
     angles = assessment.derived_angles or {}
     keyframes = (assessment.keypoint_series or {}).get("keyframes", [])
@@ -265,7 +368,7 @@ def region_measurements(assessment: Assessment) -> list[RegionMeasurement]:
                 for m in ("rula", "reba")
             ]
             ranks = [
-                _SEVERITY_RANK[c["severity"]]
+                _component_rank(c)
                 for c in found
                 if c and c.get("measured") and c.get("severity") in _SEVERITY_RANK
             ]
@@ -281,6 +384,7 @@ def region_measurements(assessment: Assessment) -> list[RegionMeasurement]:
                 peak_severity=(("ok", "moderate", "high")[peak] if peak is not None else None),
                 frames_measured=len(severities),
                 frames_at_peak_severity=(sum(1 for s in severities if s == peak) if peak else 0),
+                frames_flagged=sum(1 for s in severities if s >= _SEVERITY_RANK["moderate"]),
             )
         )
     return out

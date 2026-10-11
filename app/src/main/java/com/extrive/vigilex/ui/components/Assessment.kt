@@ -405,7 +405,7 @@ fun MethodBreakdown(result: MethodResult, peakTimeLabel: String?, modifier: Modi
             Spacer(Modifier.height(Space.sm))
             Text(
                 listOfNotNull(
-                    peakTimeLabel?.let { "Component scores at the peak-scoring frame ($it)." },
+                    peakTimeLabel?.let { "${method.label} component measurements at the peak-score frame ($it)." },
                     "Score is the band within the component's range."
                 ).joinToString(" "),
                 style = VxType.bodySmall,

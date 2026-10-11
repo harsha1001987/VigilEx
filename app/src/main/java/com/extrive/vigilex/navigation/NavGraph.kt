@@ -7,9 +7,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.navigation.NavBackStackEntry
-import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -19,6 +20,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
 import com.extrive.vigilex.data.account.AccountSession
+import com.extrive.vigilex.data.account.AuthRepository
+import com.extrive.vigilex.data.account.SessionState
+import com.extrive.vigilex.data.settings.ServerSettings
 import com.extrive.vigilex.ui.components.AccountActions
 import com.extrive.vigilex.ui.components.AppShell
 import com.extrive.vigilex.ui.components.LocalAccountActions
@@ -37,11 +41,13 @@ import com.extrive.vigilex.ui.screens.SignInScreen
 import com.extrive.vigilex.ui.studio.AssessmentStudio
 import com.extrive.vigilex.ui.studio.StudioState
 import com.extrive.vigilex.ui.theme.Motion
+import kotlinx.coroutines.launch
 
 /** Switches primary section, keeping each section's own back stack and scroll state. */
 fun NavHostController.navigateTopLevel(destination: TopLevel) {
     navigate(destination.route) {
-        popUpTo(graph.findStartDestination().id) { saveState = true }
+        // Overview is the root of the signed-in app (the graph may start at sign-in).
+        popUpTo(TopLevel.OVERVIEW.route) { saveState = true }
         launchSingleTop = true
         restoreState = true
     }
@@ -50,7 +56,15 @@ fun NavHostController.navigateTopLevel(destination: TopLevel) {
 /** Leaves the auth flow for the application, dropping the auth screens from the back stack. */
 private fun NavHostController.enterApp() {
     navigate(TopLevel.OVERVIEW.route) {
-        popUpTo(graph.findStartDestination().id)
+        popUpTo(graph.id) { inclusive = true }
+        launchSingleTop = true
+    }
+}
+
+/** Back to sign-in with nothing behind it: no screen of the previous account stays reachable. */
+private fun NavHostController.toSignIn() {
+    navigate(Routes.SIGN_IN) {
+        popUpTo(graph.id) { inclusive = true }
         launchSingleTop = true
     }
 }
@@ -77,6 +91,23 @@ fun VigilExNavGraph(navController: NavHostController) {
     val backStackEntry by navController.currentBackStackEntryAsState()
     val route = backStackEntry?.destination?.route
     val studio by AssessmentStudio.state.collectAsState()
+    val session by AccountSession.state.collectAsState()
+    val serverUrl by ServerSettings.serverUrl.collectAsState()
+    val scope = rememberCoroutineScope()
+    val authRepository = remember { AuthRepository() }
+    // Decided once: a restored session opens the app, otherwise sign-in.
+    val start = remember { if (AccountSession.isSignedIn) TopLevel.OVERVIEW.route else Routes.SIGN_IN }
+
+    // A token is only valid for the server that issued it.
+    LaunchedEffect(serverUrl) { AccountSession.serverChanged(serverUrl) }
+    // The session decides where the user can be: signing out (or expiry) returns to sign-in.
+    LaunchedEffect(session, route) {
+        if (route == null) return@LaunchedEffect
+        when (session) {
+            is SessionState.SignedOut -> if (route !in Routes.signedOut) navController.toSignIn()
+            is SessionState.SignedIn -> if (route in Routes.auth) navController.enterApp()
+        }
+    }
 
     val openDetail = { id: String -> navController.navigate(Routes.detail(id)) }
     val startAssessment = { navController.navigateTopLevel(TopLevel.ASSESSMENT) }
@@ -84,10 +115,7 @@ fun VigilExNavGraph(navController: NavHostController) {
     val openSignIn = { navController.navigate(Routes.SIGN_IN) { launchSingleTop = true } }
     val openCreateAccount = { navController.navigate(Routes.CREATE_ACCOUNT) { launchSingleTop = true } }
     val openDeveloper = { navController.navigate(Routes.DEVELOPER) { launchSingleTop = true } }
-    val signOut = {
-        AccountSession.signOut()
-        navController.enterApp()
-    }
+    val signOut: () -> Unit = { scope.launch { authRepository.signOut() } }
     val toOverview = { navController.navigateTopLevel(TopLevel.OVERVIEW) }
 
     val accountActions = remember(navController) {
@@ -108,7 +136,7 @@ fun VigilExNavGraph(navController: NavHostController) {
         ) {
             NavHost(
                 navController = navController,
-                startDestination = TopLevel.OVERVIEW.route,
+                startDestination = start,
                 enterTransition = { fadeIn(tween(Motion.base, easing = Motion.standard)) },
                 exitTransition = { fadeOut(tween(Motion.fast)) },
                 popEnterTransition = { fadeIn(tween(Motion.base, easing = Motion.standard)) },
@@ -171,21 +199,25 @@ fun VigilExNavGraph(navController: NavHostController) {
                     )
                 }
                 screen(Routes.DEVELOPER) {
-                    DeveloperOptionsScreen(onBack = { navController.back(toOverview) })
+                    DeveloperOptionsScreen(
+                        onBack = {
+                            navController.back { if (AccountSession.isSignedIn) toOverview() else navController.toSignIn() }
+                        }
+                    )
                 }
 
                 // ---- Authentication (full screen, no navigation)
                 screen(Routes.SIGN_IN) {
                     SignInScreen(
-                        onClose = { navController.back(toOverview) },
                         onSignedIn = navController::enterApp,
+                        onOpenServerSettings = openDeveloper,
                         onCreateAccount = { navController.switchAuth(Routes.SIGN_IN, Routes.CREATE_ACCOUNT) },
                         onForgotPassword = { navController.navigate(Routes.FORGOT_PASSWORD) { launchSingleTop = true } }
                     )
                 }
                 screen(Routes.CREATE_ACCOUNT) {
                     CreateAccountScreen(
-                        onClose = { navController.back(toOverview) },
+                        onClose = { navController.switchAuth(Routes.CREATE_ACCOUNT, Routes.SIGN_IN) },
                         onCreated = navController::enterApp,
                         onSignIn = { navController.switchAuth(Routes.CREATE_ACCOUNT, Routes.SIGN_IN) }
                     )

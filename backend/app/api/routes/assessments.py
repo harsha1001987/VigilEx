@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.api import scope
 from app.api.deps import get_current_user
 
 from app.core.config import get_settings
@@ -16,11 +17,7 @@ from app.cv import batch_processor
 from app.cv.track_state import TrackStateManager
 from app.cv.worker_selector import PrimaryWorkerSelector
 from app.db.database import get_db
-from app.models.area import Area
 from app.models.assessment import Assessment
-from app.models.organization import Organization
-from app.models.site import Site
-from app.models.task import Task
 from app.models.user import User
 from app.models.worker import Worker
 from app.schemas.assessment import (
@@ -43,7 +40,7 @@ log = logging.getLogger("vigilex.assessments")
 MAX_PAGE = 100
 
 
-def _get_assessment_or_404(db: Session, assessment_id: uuid.UUID, owner: User | None = None) -> Assessment:
+def _get_assessment_or_404(db: Session, assessment_id: uuid.UUID, owner: User) -> Assessment:
     # Another owner's assessment is reported exactly like a missing one.
     assessment = analyses.get_owned(db, assessment_id, owner)
     if assessment is None:
@@ -51,67 +48,40 @@ def _get_assessment_or_404(db: Session, assessment_id: uuid.UUID, owner: User | 
     return assessment
 
 
-def _validate_assessment_references(db: Session, payload: AssessmentBase) -> None:
+def _owned_payload(payload: AssessmentBase, owner: User) -> AssessmentBase:
+    """The payload as the caller may store it: the caller is the assessor, in the caller's organization.
+
+    A client-supplied assessor_id is ignored, and another organization is
+    reported as not found, exactly like an id that does not exist.
     """
-    Checks, in order:
-    1. Every referenced id (organization/site/area/task/worker/assessor) exists -> 404.
-    2. The site/area/task chain, and worker/assessor organization, actually
-       match the supplied organization_id -> 400. IDs that individually exist
-       but belong to a different parent are rejected rather than silently
-       accepted.
-    """
-    organization = db.get(Organization, payload.organization_id)
-    if organization is None:
+    if payload.organization_id != owner.organization_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
+    return payload.model_copy(update={"assessor_id": owner.id})
 
-    site = db.get(Site, payload.site_id)
-    if site is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found")
 
-    area = db.get(Area, payload.area_id)
-    if area is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Area not found")
-
-    task = db.get(Task, payload.task_id)
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
-
-    worker = None
+def _validate_assessment_references(db: Session, payload: AssessmentBase, owner: User) -> None:
+    """
+    Every referenced site, area, task and worker must exist in the caller's
+    organization; anything else is 404, exactly like an id that does not
+    exist. Then the site -> area -> task chain must match -> 400.
+    """
+    site = scope.site(db, payload.site_id, owner)
+    area = scope.area(db, payload.area_id, owner)
+    task = scope.task(db, payload.task_id, owner)
     if payload.worker_id is not None:
         worker = db.get(Worker, payload.worker_id)
-        if worker is None:
+        if worker is None or worker.organization_id != owner.organization_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Worker not found")
 
-    assessor = None
-    if payload.assessor_id is not None:
-        assessor = db.get(User, payload.assessor_id)
-        if assessor is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assessor (user) not found")
-
-    if site.organization_id != payload.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Site does not belong to the supplied organization",
-        )
-    if area.site_id != payload.site_id:
+    if area.site_id != site.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Area does not belong to the supplied site",
         )
-    if task.area_id != payload.area_id:
+    if task.area_id != area.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Task does not belong to the supplied area",
-        )
-    if worker is not None and worker.organization_id != payload.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Worker does not belong to the supplied organization",
-        )
-    if assessor is not None and assessor.organization_id != payload.organization_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Assessor does not belong to the supplied organization",
         )
 
 
@@ -127,8 +97,13 @@ def _commit(db: Session) -> None:
 
 
 @router.post("", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
-def create_assessment(payload: AssessmentCreate, db: Session = Depends(get_db)) -> Assessment:
-    _validate_assessment_references(db, payload)
+def create_assessment(
+    payload: AssessmentCreate,
+    db: Session = Depends(get_db),
+    owner: User = Depends(get_current_user),
+) -> Assessment:
+    payload = _owned_payload(payload, owner)
+    _validate_assessment_references(db, payload, owner)
     assessment = Assessment(**payload.model_dump())
     db.add(assessment)
     _commit(db)
@@ -148,7 +123,7 @@ def list_assessments(
     limit: int = Query(20, ge=1, le=MAX_PAGE),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> AssessmentPage:
     """Assessment history, newest first."""
     analyses.expire_stale_analyses(db)
@@ -178,7 +153,7 @@ def list_assessments(
 def get_assessment(
     assessment_id: uuid.UUID,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> AssessmentDetail:
     assessment = _get_assessment_or_404(db, assessment_id, owner)
     return AssessmentDetail(
@@ -194,10 +169,11 @@ def update_assessment(
     assessment_id: uuid.UUID,
     payload: AssessmentUpdate,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> Assessment:
     assessment = _get_assessment_or_404(db, assessment_id, owner)
-    _validate_assessment_references(db, payload)
+    payload = _owned_payload(payload, owner)
+    _validate_assessment_references(db, payload, owner)
     for field, value in payload.model_dump().items():
         setattr(assessment, field, value)
     _commit(db)
@@ -209,7 +185,7 @@ def update_assessment(
 def delete_assessment(
     assessment_id: uuid.UUID,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> None:
     assessment = _get_assessment_or_404(db, assessment_id, owner)
     # assessment_scores / assessment_interventions are ON DELETE CASCADE at the
@@ -225,7 +201,7 @@ def submit_cv_results(
     assessment_id: uuid.UUID,
     payload: CVPersistPayload,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> Assessment:
     """
     Persists CV batch processing results into PostgreSQL for an existing assessment.
@@ -245,15 +221,20 @@ def process_and_persist_video(
     assessment_id: uuid.UUID,
     payload: ProcessVideoPayload,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> Assessment:
     """
     Runs the CV video processing pipeline (YOLO11n-Pose + ByteTrack -> RULA/REBA)
     on a video file and persists the resulting assessment into PostgreSQL.
     """
     assessment = _get_assessment_or_404(db, assessment_id, owner)
+    uploads = settings.upload_path.resolve()
+    video = Path(payload.video_path)
+    video = (video if video.is_absolute() else uploads / video).resolve()
+    if not video.is_relative_to(uploads) or not video.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
     cv_result = batch_processor.process_video(
-        video_path=payload.video_path,
+        video_path=str(video),
         stride_hz=payload.stride_hz,
     )
     return persist_cv_assessment_results(
@@ -271,7 +252,7 @@ def upload_and_process_video(
     stride_hz: float = Form(25.0),
     requested_track_id: int | None = Form(None),
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> Assessment:
     """
     Accepts a multipart/form-data video upload from Android client or web client,
@@ -413,7 +394,7 @@ def _completed_or_400(assessment: Assessment) -> None:
 def generate_report(
     assessment_id: uuid.UUID,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> ReportMetadata:
     """Generates (or regenerates) the PDF report from the stored assessment."""
     assessment = _get_assessment_or_404(db, assessment_id, owner)
@@ -433,7 +414,7 @@ def generate_report(
 def get_report(
     assessment_id: uuid.UUID,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> ReportMetadata:
     assessment = _get_assessment_or_404(db, assessment_id, owner)
     path = reports.stored_report(assessment)
@@ -446,7 +427,7 @@ def get_report(
 def download_report(
     assessment_id: uuid.UUID,
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> FileResponse:
     """The generated PDF, for export or the platform share sheet."""
     assessment = _get_assessment_or_404(db, assessment_id, owner)

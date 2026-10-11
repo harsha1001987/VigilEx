@@ -3,9 +3,8 @@ package com.extrive.vigilex.data.model
 import kotlinx.serialization.Serializable
 
 /**
- * Lightweight index entry for one completed analysis saved on this device.
- * Every number is copied from the backend response; the full response is
- * stored separately and loaded only for the diagnostic view.
+ * One saved assessment as the app's lists, detail and report use it. Every
+ * number, risk label and intervention is copied from the backend.
  */
 @Serializable
 data class AssessmentRecord(
@@ -24,8 +23,26 @@ data class AssessmentRecord(
     val derivedAngles: DerivedAngles? = null,
     val rulaDistribution: Map<String, Int> = emptyMap(),
     val rebaDistribution: Map<String, Int> = emptyMap(),
-    val methodologyVersion: String? = null
+    val methodologyVersion: String? = null,
+    /** From the backend intervention engine; the first is the priority action. */
+    val actionSummary: String? = null,
+    val interventions: List<InterventionDto> = emptyList(),
+    /** Extrive products to evaluate, each tied to a qualifying finding; usually empty. */
+    val productRecommendations: List<ProductRecommendationDto> = emptyList(),
+    val measurementReliability: MeasurementReliabilityDto? = null
 ) {
+    val priorityAction: InterventionDto? get() = interventions.firstOrNull()
+    val otherActions: List<InterventionDto> get() = interventions.drop(1)
+
+    /** The product linked to the priority action, shown directly after it. */
+    val primaryProduct: ProductRecommendationDto? get() = productRecommendations.firstOrNull { it.role == "primary" }
+
+    /** One line for lists: the priority action, and the product to evaluate for it. */
+    val priorityLine: String?
+        get() = priorityAction?.let { action ->
+            listOfNotNull(action.title, primaryProduct?.headline).joinToString(" · ")
+        }
+
     companion object {
         fun from(
             id: String,

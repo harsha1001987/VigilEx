@@ -4,28 +4,23 @@ Tests for sites, areas, tasks hierarchy API endpoints and assessment creation.
 
 import uuid
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import app
 from app.db.database import SessionLocal
 from app.models.organization import Organization
 from app.models.site import Site
 from app.models.area import Area
 from app.models.task import Task
 from app.models.assessment import Assessment
+from conftest import client_for, make_user
 
 
 @pytest.fixture
 def test_client():
-    client = TestClient(app)
     db = SessionLocal()
-
-    # Seed required hierarchy
-    org = db.query(Organization).filter(Organization.name == "Hierarchy Test Org").first()
-    if not org:
-        org = Organization(id=uuid.uuid4(), name="Hierarchy Test Org")
-        db.add(org)
-        db.commit()
+    # Seed the hierarchy in the signed-in account's own organization.
+    user = make_user(db)
+    client = client_for(user)
+    org = db.get(Organization, user.organization_id)
 
     site = db.query(Site).filter(Site.organization_id == org.id, Site.name == "Hierarchy Test Site").first()
     if not site:

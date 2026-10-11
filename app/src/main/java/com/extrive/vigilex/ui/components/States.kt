@@ -20,6 +20,8 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.extrive.vigilex.data.api.ApiResult
+import com.extrive.vigilex.data.api.ErrorKind
 import com.extrive.vigilex.ui.theme.Hairline
 import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkSecondary
@@ -71,6 +73,41 @@ fun ErrorState(
             ButtonRow { actions() }
         }
     }
+}
+
+/** Title for a failed backend call, specific to what failed. */
+fun ApiResult.Error.title(notFound: String = "Not found"): String = when (kind) {
+    ErrorKind.UNREACHABLE -> "Server unavailable"
+    ErrorKind.TIMEOUT -> "Server not responding"
+    ErrorKind.NOT_FOUND -> notFound
+    ErrorKind.REJECTED -> "Request not accepted"
+    ErrorKind.UNAUTHORIZED -> "Signed out"
+    ErrorKind.CONFLICT -> "Already exists"
+    ErrorKind.RATE_LIMITED -> "Too many attempts"
+    ErrorKind.SERVER -> "Server error"
+    ErrorKind.BAD_RESPONSE -> "Unexpected response"
+    ErrorKind.OTHER -> "Something went wrong"
+}
+
+/**
+ * A failed backend call. Not-found is final (no retry); every other failure
+ * can be retried. [notFoundMessage] replaces the server's wording for 404s.
+ */
+@Composable
+fun BackendErrorState(
+    error: ApiResult.Error,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    notFoundTitle: String = "Not found",
+    notFoundMessage: String? = null
+) {
+    val notFound = error.kind == ErrorKind.NOT_FOUND
+    ErrorState(
+        title = error.title(notFoundTitle),
+        message = if (notFound && notFoundMessage != null) notFoundMessage else error.message,
+        modifier = modifier,
+        actions = if (notFound) null else ({ PrimaryButton("Try again", onClick = onRetry) })
+    )
 }
 
 @Composable

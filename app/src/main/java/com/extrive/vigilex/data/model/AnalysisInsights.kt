@@ -109,6 +109,14 @@ fun severityOf(raw: String?): Severity? = when (raw) {
 }
 
 /**
+ * The component's backend severity, except that its lowest band is always OK.
+ * The backend derives severity from band / max_band, which labels the lowest
+ * band of short scales "moderate" (REBA neck 1 / 2, RULA neck 1 / 3) even for
+ * an upright neck. Must match LOWEST_BAND in backend analysis_assessments.py.
+ */
+fun FrameComponent.effectiveSeverity(): Severity? = if (band == 1) Severity.OK else severityOf(severity)
+
+/**
  * Highest component severity the backend reported for this body region in
  * any scored keyframe, across both RULA and REBA. Null when never measured.
  */
@@ -117,7 +125,7 @@ fun AnalysisResult.impact(metric: BodyMetric): Severity? =
         .flatMap { sequenceOf(it.rula, it.reba) }
         .mapNotNull { it?.components?.get(metric.componentKey) }
         .filter { it.measured == true }
-        .mapNotNull { severityOf(it.severity) }
+        .mapNotNull { it.effectiveSeverity() }
         .maxOrNull()
 
 // ------------------------------------------------------- per-frame components

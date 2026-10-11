@@ -31,6 +31,10 @@ object Routes {
     /** Full-screen routes drawn without the navigation shell. */
     val auth = setOf(SIGN_IN, CREATE_ACCOUNT, FORGOT_PASSWORD)
 
+    /** Reachable without signing in; every other route requires an account. Developer options
+     *  stay reachable so a phone can be pointed at the right server before signing in. */
+    val signedOut = auth + DEVELOPER
+
     fun detail(id: String) = "assessment/$id"
     fun report(id: String) = "assessment/$id/report"
 }

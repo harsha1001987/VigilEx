@@ -1,5 +1,7 @@
 package com.extrive.vigilex.data.repository
 
+import com.extrive.vigilex.data.account.TestAccounts
+import com.extrive.vigilex.data.api.ApiResult
 import com.extrive.vigilex.data.model.Method
 import com.extrive.vigilex.data.model.isScoreable
 import com.extrive.vigilex.data.model.peakRisk
@@ -29,6 +31,8 @@ class AnalysisRepositoryIntegrationTest {
 
     private fun requireServer() = runBlocking {
         assumeTrue("VigilEx server not running at $server", repository.isServerReachable(server))
+        // Analysis needs an account; the app's own client attaches its token.
+        TestAccounts.signIn(server, TestAccounts.A)
     }
 
     @Test
@@ -54,6 +58,10 @@ class AnalysisRepositoryIntegrationTest {
         assertNotNull(result.derivedAngles?.kneeAvg)
         assertTrue(result.keyframes.isNotEmpty())
         assertTrue(outcome.rawJson.contains("\"keyframes\""))
+
+        // Analyses are saved on the server now; don't leave test runs in the user's history.
+        val id = requireNotNull(result.assessmentId) { "analyze-video returned no assessment_id" }
+        assertTrue(AssessmentRepository(baseUrl = { server }, videoUriFor = { null }).delete(id) is ApiResult.Success)
     }
 
     @Test

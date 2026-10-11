@@ -8,6 +8,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -19,6 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.extrive.vigilex.data.account.AccountSession
+import com.extrive.vigilex.data.api.ApiResult
+import com.extrive.vigilex.data.repository.AssessmentRepository
 import com.extrive.vigilex.data.settings.ServerSettings
 import com.extrive.vigilex.data.store.AssessmentStore
 import com.extrive.vigilex.ui.components.PageContainer
@@ -48,8 +51,15 @@ fun SettingsScreen(
     onOpenDeveloperOptions: () -> Unit
 ) {
     val account by AccountSession.current.collectAsState()
-    val records by AssessmentStore.records.collectAsState()
-    val loaded by AssessmentStore.loaded.collectAsState()
+    val repository = remember { AssessmentRepository() }
+    val revision by AssessmentStore.revision.collectAsState()
+    // Completed assessments on the server; null until known or when the server is unreachable.
+    var savedCount by remember { mutableStateOf<Int?>(null) }
+    var clearing by remember { mutableStateOf(false) }
+    var clearNote by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(revision) {
+        savedCount = (repository.history(limit = 1) as? ApiResult.Success)?.data?.total
+    }
     val developer by ServerSettings.developerOptions.collectAsState()
     val context = LocalContext.current
     val version = remember { appVersion(context) }
@@ -74,18 +84,23 @@ fun SettingsScreen(
         Spacer(Modifier.height(Space.xxl))
 
         SectionLabel("Data")
+        val canClear = (savedCount ?: 0) > 0 && !clearing
         SettingsRow(
             "Saved assessments",
-            value = if (loaded) records.size.toString() else null
+            value = savedCount?.toString()
         )
         SettingsRow(
-            "Clear assessment history",
-            labelColor = if (records.isNotEmpty()) Red else InkFaint,
-            onClick = if (records.isNotEmpty()) ({ confirmClear = true }) else null
+            if (clearing) "Clearing assessment history…" else "Clear assessment history",
+            labelColor = if (canClear) Red else InkFaint,
+            onClick = if (canClear) ({ confirmClear = true }) else null
         )
+        clearNote?.let {
+            Spacer(Modifier.height(Space.xs))
+            Text(it, style = VxType.bodySmall, color = Red)
+        }
         Spacer(Modifier.height(Space.sm))
         Text(
-            "Assessments are saved on this device. Overview, History and Reports are built from them. " +
+            "Assessments are saved on the VigilEx server. Overview, History and Reports are built from them. " +
                 "Your videos stay in your gallery or files.",
             style = VxType.bodySmall,
             color = InkMuted,
@@ -121,7 +136,12 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     confirmClear = false
-                    scope.launch { AssessmentStore.clear() }
+                    clearing = true
+                    clearNote = null
+                    scope.launch {
+                        clearNote = clearAll(repository)
+                        clearing = false
+                    }
                 }) { Text("DELETE", style = VxType.labelLarge, color = Red) }
             },
             dismissButton = {
@@ -160,4 +180,15 @@ private fun appVersion(context: Context): String? = try {
     context.packageManager.getPackageInfo(context.packageName, 0).versionName
 } catch (e: Exception) {
     null
+}
+
+/** Deletes every completed assessment on the server. Returns a message when not all could be deleted. */
+private suspend fun clearAll(repository: AssessmentRepository): String? {
+    val records = when (val all = repository.allCompleted()) {
+        is ApiResult.Success -> all.data
+        is ApiResult.Error -> return "Nothing was deleted. ${all.message}"
+    }
+    val failed = records.count { repository.delete(it.id) is ApiResult.Error }
+    if (failed == 0) AssessmentStore.cleared() else AssessmentStore.changed()
+    return if (failed == 0) null else "$failed of ${records.size} assessments could not be deleted. Try again."
 }

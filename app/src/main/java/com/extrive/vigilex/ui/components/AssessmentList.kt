@@ -23,6 +23,7 @@ import com.extrive.vigilex.ui.format.formatScore
 import com.extrive.vigilex.ui.format.formatSeconds
 import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkMuted
+import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
 
@@ -61,14 +62,16 @@ fun AssessmentList(
             val record = records[row]
             when (column) {
                 0 -> CellText(formatDateTime(record.createdAtMillis), muted = true)
-                1 -> Text(
-                    record.fileName,
-                    style = VxType.tableCell,
-                    color = Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(end = Space.md)
-                )
+                1 -> Column(Modifier.padding(end = Space.md)) {
+                    Text(
+                        record.fileName,
+                        style = VxType.tableCell,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    record.priorityLine?.let { PriorityLine(it) }
+                }
                 2 -> CellText(formatSeconds(record.durationSec))
                 3 -> CellText(formatScore(record.rulaMax), strong = true)
                 4 -> CellText(formatScore(record.rebaMax), strong = true)
@@ -106,12 +109,26 @@ private fun CompactRow(record: AssessmentRecord, onClick: () -> Unit) {
                 style = VxType.bodySmall,
                 color = InkMuted
             )
+            record.priorityLine?.let { PriorityLine(it) }
         }
         Spacer(Modifier.width(Space.md))
         ScorePill(Method.RULA, record.rulaMax)
         Spacer(Modifier.width(Space.md))
         ScorePill(Method.REBA, record.rebaMax)
     }
+}
+
+/** The priority action, and the product to evaluate for it, from the backend. */
+@Composable
+fun PriorityLine(text: String, modifier: Modifier = Modifier) {
+    Text(
+        "Priority: $text",
+        style = VxType.bodySmall,
+        color = InkSecondary,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier
+    )
 }
 
 @Composable

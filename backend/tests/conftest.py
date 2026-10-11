@@ -33,6 +33,8 @@ TEST_DATABASE_URL = _dev_url.set(database=TEST_DATABASE)
 # Must happen before app.core.config is imported anywhere (settings are cached).
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL.render_as_string(hide_password=False)
 os.environ["REPORT_DIR"] = tempfile.mkdtemp(prefix="vigilex-reports-")
+# A throwaway signing key, so tests never depend on (or reveal) the developer's .env key.
+os.environ["AUTH_SECRET_KEY"] = "test-signing-key-" + "x" * 40
 
 import pytest  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
@@ -76,6 +78,9 @@ def clean_tables(migrated_database):
 
     with engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {', '.join(TABLES)} CASCADE"))
+    from app.core.rate_limit import limiter
+
+    limiter.reset()
 
 
 @pytest.fixture
@@ -93,10 +98,49 @@ def db():
     session.close()
 
 
-@pytest.fixture
-def client():
+# ---------------------------------------------------------------- accounts
+
+DEFAULT_EMAIL = "owner@example.com"
+DEFAULT_PASSWORD = "owner-password-1"
+
+
+def make_user(db, email: str = DEFAULT_EMAIL, name: str = "Test Owner", password: str = DEFAULT_PASSWORD):
+    """The account with [email], registered (with its own organization) if it does not exist yet."""
+    from app.services import auth
+
+    return auth.find_by_email(db, email) or auth.register(db, name=name, email=email, password=password)
+
+
+def bearer(user) -> dict[str, str]:
+    from app.core.security import create_access_token
+
+    return {"Authorization": f"Bearer {create_access_token(user.id, user.session_version).token}"}
+
+
+def client_for(user):
     from fastapi.testclient import TestClient
 
     from app.main import app
 
-    return TestClient(app)
+    return TestClient(app, headers=bearer(user) if user is not None else None)
+
+
+@pytest.fixture
+def user(db):
+    """The default test account; `client` is signed in as it."""
+    return make_user(db)
+
+
+@pytest.fixture
+def client(db, user):
+    """An API client signed in as `user`."""
+    signed_in = client_for(user)
+    # Leave no transaction open on `users`: a migration test altering the table would wait on it forever.
+    db.commit()
+    return signed_in
+
+
+@pytest.fixture
+def anon_client():
+    """An API client with no credentials."""
+    return client_for(None)

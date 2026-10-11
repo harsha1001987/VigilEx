@@ -19,7 +19,15 @@ from fastapi.testclient import TestClient
 from app.api.routes import cv_analysis
 from app.main import app
 
-client = TestClient(app)
+from conftest import client_for, make_user  # noqa: E402
+
+
+def _signed_in():
+    """A client signed in as the default test account (analysis requires an account)."""
+    from app.db.database import SessionLocal
+
+    with SessionLocal() as db:
+        return client_for(make_user(db))
 
 TEST_VIDEO_PATH = (
     Path(__file__).resolve().parent
@@ -29,21 +37,26 @@ TEST_VIDEO_PATH = (
 ANALYZE_URL = "/api/v1/analyze-video"
 
 
+def test_analyze_video_requires_an_account():
+    response = TestClient(app).post(ANALYZE_URL, files={"file": ("clip.mp4", b"x", "video/mp4")})
+    assert response.status_code == 401
+
+
 def test_analyze_video_endpoint_exists():
     """A request with no file should be routed (422), not 404."""
-    response = client.post(ANALYZE_URL)
+    response = _signed_in().post(ANALYZE_URL)
 
     assert response.status_code != 404
 
 
 def test_missing_file_returns_4xx():
-    response = client.post(ANALYZE_URL)
+    response = _signed_in().post(ANALYZE_URL)
 
     assert 400 <= response.status_code < 500
 
 
 def test_invalid_file_type_is_rejected():
-    response = client.post(
+    response = _signed_in().post(
         ANALYZE_URL,
         files={"file": ("notes.txt", b"this is not a video", "text/plain")},
     )
@@ -53,7 +66,7 @@ def test_invalid_file_type_is_rejected():
 
 
 def test_empty_upload_is_rejected():
-    response = client.post(
+    response = _signed_in().post(
         ANALYZE_URL,
         files={"file": ("clip.mp4", b"", "video/mp4")},
     )
@@ -71,7 +84,7 @@ def test_processing_failure_is_handled_cleanly(monkeypatch):
         _boom,
     )
 
-    response = client.post(
+    response = _signed_in().post(
         ANALYZE_URL,
         files={"file": ("clip.mp4", b"not a real video but non-empty", "video/mp4")},
     )
@@ -95,7 +108,7 @@ class TestAnalyzeVideoWithRealVideo:
     @pytest.fixture(scope="class")
     def result(self):
         with open(TEST_VIDEO_PATH, "rb") as video_file:
-            response = client.post(
+            response = _signed_in().post(
                 ANALYZE_URL,
                 files={
                     "file": (

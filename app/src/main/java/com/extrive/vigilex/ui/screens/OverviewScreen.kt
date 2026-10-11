@@ -12,29 +12,38 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
-import com.extrive.vigilex.data.model.AssessmentRecord
-import com.extrive.vigilex.data.model.Method
+import com.extrive.vigilex.data.api.ApiResult
 import com.extrive.vigilex.data.insight.Interpretation
 import com.extrive.vigilex.data.insight.interpret
+import com.extrive.vigilex.data.model.AssessmentRecord
+import com.extrive.vigilex.data.model.OverviewDto
+import com.extrive.vigilex.data.repository.AssessmentRepository
 import com.extrive.vigilex.data.store.AssessmentStore
 import com.extrive.vigilex.ui.components.ArrowLink
 import com.extrive.vigilex.ui.components.AssessmentList
+import com.extrive.vigilex.ui.components.BackendErrorState
 import com.extrive.vigilex.ui.components.EmptyState
 import com.extrive.vigilex.ui.components.GridRows
 import com.extrive.vigilex.ui.components.Hairline
 import com.extrive.vigilex.ui.components.KeyFinding
 import com.extrive.vigilex.ui.components.KeySquare
-import com.extrive.vigilex.ui.components.RiskConclusion
 import com.extrive.vigilex.ui.components.LoadingState
 import com.extrive.vigilex.ui.components.LocalWindowClass
 import com.extrive.vigilex.ui.components.PageContainer
 import com.extrive.vigilex.ui.components.PageHeader
+import com.extrive.vigilex.ui.components.RiskConclusion
+import com.extrive.vigilex.ui.components.PriorityLine
 import com.extrive.vigilex.ui.components.SectionLabel
 import com.extrive.vigilex.ui.components.WindowClass
 import com.extrive.vigilex.ui.format.EMPTY_VALUE
@@ -62,9 +71,16 @@ fun OverviewScreen(
     onOpenAssessment: (String) -> Unit,
     onOpenHistory: () -> Unit
 ) {
-    val records by AssessmentStore.records.collectAsState()
-    val loaded by AssessmentStore.loaded.collectAsState()
+    val repository = remember { AssessmentRepository() }
+    val revision by AssessmentStore.revision.collectAsState()
     val studio by AssessmentStudio.state.collectAsState()
+    var attempt by remember { mutableIntStateOf(0) }
+    var overview by remember { mutableStateOf<ApiResult<OverviewDto>?>(null) }
+
+    LaunchedEffect(revision, attempt) {
+        if (overview !is ApiResult.Success) overview = null
+        overview = repository.overview()
+    }
 
     PageContainer {
         PageHeader(
@@ -77,90 +93,113 @@ fun OverviewScreen(
             Spacer(Modifier.height(Space.xl))
         }
 
-        when {
-            !loaded -> LoadingState()
-            records.isEmpty() -> EmptyState(
-                title = "No assessments yet",
-                body = "Analyze a workplace video to begin your ergonomic assessment history.",
-                actionLabel = "Start assessment",
-                onAction = onStartAssessment
-            )
-            else -> OverviewContent(records, onOpenAssessment, onOpenHistory, onStartAssessment)
+        when (val current = overview) {
+            null -> LoadingState()
+            is ApiResult.Error -> BackendErrorState(current, onRetry = { attempt++ })
+            is ApiResult.Success -> if (current.data.totalAssessments == 0) {
+                EmptyState(
+                    title = "No assessments yet",
+                    body = "Analyze a workplace video to begin your ergonomic assessment history.",
+                    actionLabel = "Start assessment",
+                    onAction = onStartAssessment
+                )
+            } else {
+                val recent = remember(current.data) { current.data.latest.map(repository::toRecord) }
+                OverviewContent(current.data, recent, repository, onOpenAssessment, onOpenHistory, onStartAssessment)
+            }
         }
     }
 }
 
 @Composable
 private fun OverviewContent(
-    records: List<AssessmentRecord>,
+    overview: OverviewDto,
+    recent: List<AssessmentRecord>,
+    repository: AssessmentRepository,
     onOpenAssessment: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onStartAssessment: () -> Unit
 ) {
     val compact = LocalWindowClass.current == WindowClass.COMPACT
-    val latest = records.first()
+    val latest = recent.firstOrNull()
 
-    SummaryFigures(records)
+    SummaryFigures(overview, latest)
     Spacer(Modifier.height(Space.xxl))
 
-    SectionLabel("Latest assessment") {
-        ArrowLink("Full assessment", onClick = { onOpenAssessment(latest.id) })
-    }
-    Text(
-        latest.fileName,
-        style = VxType.title,
-        color = Ink,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis
-    )
-    Text(
-        "${formatDateTime(latest.createdAtMillis)} · ${formatSeconds(latest.durationSec)} of video",
-        style = VxType.bodySmall,
-        color = InkMuted
-    )
-    Spacer(Modifier.height(Space.xl))
+    if (latest != null) {
+        SectionLabel("Latest assessment") {
+            ArrowLink("Full assessment", onClick = { onOpenAssessment(latest.id) })
+        }
+        Text(
+            latest.fileName,
+            style = VxType.title,
+            color = Ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            "${formatDateTime(latest.createdAtMillis)} · ${formatSeconds(latest.durationSec)} of video",
+            style = VxType.bodySmall,
+            color = InkMuted
+        )
+        latest.priorityLine?.let { PriorityLine(it) }
+        Spacer(Modifier.height(Space.xl))
 
-    // The saved result is read once so the conclusion is interpreted from the full response.
-    val interpretation by produceState<Interpretation?>(null, latest.id) {
-        value = AssessmentStore.loadResult(latest.id)?.let(::interpret)
-    }
-    val current = interpretation
-    val key = current?.keyFinding
-    when {
-        current == null -> LoadingState()
-        compact || key == null -> {
-            RiskConclusion(current, showGuidance = false)
-            key?.let {
-                Spacer(Modifier.height(Space.xl))
-                KeyFinding(it)
+        // The stored analysis is read so the conclusion is interpreted from the full result.
+        var attempt by remember(latest.id) { mutableIntStateOf(0) }
+        val loaded by produceState<ApiResult<Interpretation>?>(null, latest.id, attempt) {
+            value = when (val detail = repository.detail(latest.id)) {
+                is ApiResult.Success -> ApiResult.Success(interpret(detail.data.result))
+                is ApiResult.Error -> detail
             }
         }
-        else -> Row(horizontalArrangement = Arrangement.spacedBy(Space.xxl), verticalAlignment = Alignment.Top) {
-            RiskConclusion(current, Modifier.weight(1.2f), showGuidance = false)
-            KeyFinding(key, Modifier.weight(1f))
+        when (val state = loaded) {
+            null -> LoadingState()
+            is ApiResult.Error -> BackendErrorState(
+                state,
+                onRetry = { attempt++ },
+                notFoundTitle = "Assessment not found"
+            )
+            is ApiResult.Success -> {
+                val current = state.data
+                val key = current.keyFinding
+                if (compact || key == null) {
+                    RiskConclusion(current, showGuidance = false)
+                    key?.let {
+                        Spacer(Modifier.height(Space.xl))
+                        KeyFinding(it)
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.xxl), verticalAlignment = Alignment.Top) {
+                        RiskConclusion(current, Modifier.weight(1.2f), showGuidance = false)
+                        KeyFinding(key, Modifier.weight(1f))
+                    }
+                }
+            }
         }
     }
 
-    if (records.size > 1) {
+    if (overview.totalAssessments > 1 && recent.size > 1) {
         Spacer(Modifier.height(Space.xxl))
         SectionLabel("Recent assessments") {
             ArrowLink("All history", onClick = onOpenHistory)
         }
-        AssessmentList(records.take(RECENT_COUNT), onOpen = { onOpenAssessment(it.id) })
+        AssessmentList(recent.take(RECENT_COUNT), onOpen = { onOpenAssessment(it.id) })
     }
 
     Spacer(Modifier.height(Space.xxl))
     ArrowLink("New assessment", onClick = onStartAssessment)
 }
 
+/** The backend's aggregates over all completed assessments. */
 @Composable
-private fun SummaryFigures(records: List<AssessmentRecord>) {
+private fun SummaryFigures(overview: OverviewDto, latest: AssessmentRecord?) {
     val columns = if (LocalWindowClass.current == WindowClass.COMPACT) 2 else 4
     val figures = listOf(
-        "Total assessments" to records.size.toString(),
-        "Highest RULA" to (records.mapNotNull { it.rulaMax }.maxOrNull()?.let { "${formatScore(it)} / ${formatScale(Method.RULA.scaleMax)}" } ?: EMPTY_VALUE),
-        "Highest REBA" to (records.mapNotNull { it.rebaMax }.maxOrNull()?.let { "${formatScore(it)} / ${formatScale(Method.REBA.scaleMax)}" } ?: EMPTY_VALUE),
-        "Last analyzed" to formatDate(records.first().createdAtMillis)
+        "Total assessments" to overview.totalAssessments.toString(),
+        "Highest RULA" to (overview.rula.highest?.let { "${formatScore(it)} / ${formatScale(overview.rula.scaleMax)}" } ?: EMPTY_VALUE),
+        "Highest REBA" to (overview.reba.highest?.let { "${formatScore(it)} / ${formatScale(overview.reba.scaleMax)}" } ?: EMPTY_VALUE),
+        "Last analyzed" to (latest?.let { formatDate(it.createdAtMillis) } ?: EMPTY_VALUE)
     )
     GridRows(figures, columns, verticalGap = Space.lg) { (label, value) ->
         Column {

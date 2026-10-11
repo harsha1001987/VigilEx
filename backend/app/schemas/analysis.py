@@ -87,6 +87,120 @@ class CVAnalysisResult(_Open):
 
 # ------------------------------------------------------------------ responses
 
+# ------------------------------------------------------- posture interventions
+
+InterventionArea = Literal["back", "knees", "neck", "upper_arm"]
+RegionStatus = Literal["not_measured", "low", "attention", "elevated", "high"]
+
+
+class BackPosture(BaseModel):
+    """The VigilEx back/trunk posture metric: trunk inclination from upright.
+
+    The angle is the stored trunk_deg (hip -> shoulder line from vertical,
+    the same value RULA and REBA score). Direction and view reliability are
+    derived from the stored landmarks. Observed posture only.
+    """
+
+    average_deg: float | None
+    peak_deg: float | None
+    frames_measured: int
+    # Frames where the trunk was inclined beyond the upright band (> 10 degrees).
+    frames_inclined: int
+    # Which way the inclined frames leaned, when the landmarks show it.
+    direction: Literal["forward", "backward", "mixed"] | None
+    # Share of measured frames filmed close to side-on, where 2D trunk angles are most reliable.
+    side_on_fraction: float
+    # True when most frames were not side-on, so forward bending may be under-measured.
+    view_limited: bool
+
+
+class InterventionEvidence(BaseModel):
+    average_deg: float | None
+    peak_deg: float | None
+    frames_flagged: int
+    frames_measured: int
+
+
+class Intervention(BaseModel):
+    """A workplace posture recommendation derived from measured posture. Not medical advice."""
+
+    area: InterventionArea
+    priority: Literal["high", "medium"]
+    status: RegionStatus
+    title: str
+    observation: str
+    recommendation: str
+    evidence: InterventionEvidence
+
+
+class ProductRecommendation(BaseModel):
+    """An Extrive product suggested for evaluation because of a specific finding.
+
+    Built from approved product content (app/content/extrive_products.json)
+    and the linked intervention's measured evidence. A suggestion to
+    evaluate, never a statement that the worker needs the product.
+    """
+
+    product_id: str
+    name: str
+    maker: str
+    category: str | None
+    # The intervention area whose finding triggered the suggestion.
+    linked_area: InterventionArea
+    # "primary" when the linked finding is the priority action.
+    role: Literal["primary", "supporting"]
+    headline: str
+    # Why it is suggested for this assessment, from the measured finding.
+    rationale: str
+    intended_use: str | None
+    operating_principle: str | None
+    task_types: list[str]
+    suitability: list[str]
+    # Task-level changes the product complements, never replaces.
+    complementary_actions: list[str]
+    evidence_note: str | None
+    qualification: str
+    sources: list[str]
+    # "incomplete" when approved product content is missing; see content_gaps.
+    content_status: Literal["verified", "incomplete"]
+    content_gaps: list[str] = []
+
+
+class MeasurementReliability(BaseModel):
+    """How far the camera view supports the 2D angle measurements, from this assessment's own values."""
+
+    # "no_limitation_detected" is not a confidence claim; it means no check below failed.
+    status: Literal["limited", "no_limitation_detected"]
+    # Share of measured frames filmed close to side-on (camera yaw <= 45 degrees); None when the trunk was never measured.
+    side_on_fraction: float | None
+    # Share of sampled frames in which the worker was detected.
+    detection_fraction: float | None
+    explanation: str
+    title: str | None = None
+    reasons: list[str] = []
+    recommendation: str | None = None
+
+
+class ComponentRow(BaseModel):
+    name: str
+    measured: bool
+    angle_deg: float | None
+    band: int | None
+    max_band: int | None
+
+
+class ComponentTable(BaseModel):
+    """One method's components at the first frame where that method reached its peak score."""
+
+    method: Literal["RULA", "REBA"]
+    title: str
+    score: int
+    scale_max: int
+    frame_number: int
+    frame_time_sec: float | None
+    rows: list[ComponentRow]
+
+
 class MethodResult(BaseModel):
     score: int | None
     scale_max: int
@@ -108,6 +222,15 @@ class AssessmentSummary(BaseModel):
     reba: MethodResult | None
     overall_risk: OverallRisk | None
     methodology_version: str
+    # The stored derived_angles, so history-wide aggregates need no per-assessment fetch.
+    derived_angles: dict[str, Any] | None = None
+    # One plain-language sentence: overall risk and the main opportunities.
+    action_summary: str | None = None
+    # Most important first; empty when no region needs action.
+    interventions: list[Intervention] = []
+    # Extrive products to evaluate, each linked to a qualifying intervention; usually empty.
+    product_recommendations: list[ProductRecommendation] = []
+    measurement_reliability: MeasurementReliability | None = None
 
 
 class AssessmentPage(BaseModel):
@@ -131,6 +254,8 @@ class RegionMeasurement(BaseModel):
     peak_severity: Literal["ok", "moderate", "high"] | None
     frames_measured: int
     frames_at_peak_severity: int
+    # Frames at moderate severity or above.
+    frames_flagged: int = 0
 
 
 class OverviewMethodStats(BaseModel):
@@ -179,9 +304,21 @@ class ReportContent(BaseModel):
     rula: MethodResult | None
     reba: MethodResult | None
     observation: str | None
+    action_summary: str | None = None
+    interventions: list[Intervention] = []
+    product_recommendations: list[ProductRecommendation] = []
+    measurement_reliability: MeasurementReliability | None = None
+    back_posture: BackPosture | None = None
     findings: list[ReportFinding]
     measurements: list[RegionMeasurement]
+    # How "Not measured" in the measurements must be read.
+    measurement_note: str = ""
     evidence_frames: int
+    # Main report sections in reading order, then the technical appendix.
+    sections: list[str] = []
+    technical_section: str = ""
+    component_note: str = ""
+    component_tables: list[ComponentTable] = []
     methodology: list[str]
     limitations: list[str]
     methodology_version: str

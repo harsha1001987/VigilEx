@@ -66,18 +66,24 @@ fun ProfileScreen(
         if (current != null) {
             SettingsRow("Name", value = current.name)
             SettingsRow("Email", value = current.email)
+            Spacer(Modifier.height(Space.sm))
+            Text(
+                "Your assessments and reports are saved to this account on the VigilEx server. Signing out " +
+                    "removes downloaded reports from this device.",
+                style = VxType.bodySmall,
+                color = InkMuted,
+                modifier = Modifier.widthIn(max = 520.dp)
+            )
             Spacer(Modifier.height(Space.xl))
             SettingsRow("Sign out", labelColor = Red, onClick = onSignOut)
         } else {
             Text(
-                "VigilEx works without an account. Your assessments are saved on this device.",
+                "Sign in to see your assessments. They are saved to your account on the VigilEx server.",
                 style = VxType.body,
                 color = InkSecondary,
                 modifier = Modifier.widthIn(max = 520.dp)
             )
             Spacer(Modifier.height(Space.lg))
-            SettingsRow("Name", value = "Not available")
-            SettingsRow("Email", value = "Not available")
             Spacer(Modifier.height(Space.xl))
             ButtonRow {
                 PrimaryButton(text = "Sign in", onClick = onSignIn)

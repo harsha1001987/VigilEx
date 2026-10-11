@@ -9,16 +9,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import com.extrive.vigilex.data.api.ApiResult
 import com.extrive.vigilex.data.model.Method
 import com.extrive.vigilex.data.model.ReportData
 import com.extrive.vigilex.data.model.TrendPoint
 import com.extrive.vigilex.data.model.buildReport
+import com.extrive.vigilex.data.repository.AssessmentRepository
 import com.extrive.vigilex.data.store.AssessmentStore
+import com.extrive.vigilex.ui.components.BackendErrorState
 import com.extrive.vigilex.ui.components.CellText
 import com.extrive.vigilex.ui.components.DataTable
 import com.extrive.vigilex.ui.components.EmptyState
@@ -46,18 +53,30 @@ import com.extrive.vigilex.ui.theme.VxType
 
 @Composable
 fun ReportsScreen(onStartAssessment: () -> Unit) {
-    val records by AssessmentStore.records.collectAsState()
-    val loaded by AssessmentStore.loaded.collectAsState()
-    val report = remember(records) { buildReport(records) }
+    val repository = remember { AssessmentRepository() }
+    val revision by AssessmentStore.revision.collectAsState()
+    var attempt by remember { mutableIntStateOf(0) }
+    // null while loading; a null report inside Success means there are no assessments.
+    var state by remember { mutableStateOf<ApiResult<ReportData?>?>(null) }
+    LaunchedEffect(revision, attempt) {
+        if (state !is ApiResult.Success) state = null
+        state = when (val records = repository.allCompleted()) {
+            is ApiResult.Success -> ApiResult.Success(buildReport(records.data))
+            is ApiResult.Error -> records
+        }
+    }
+    val current = state
+    val report = (current as? ApiResult.Success)?.data
 
     PageContainer {
         PageHeader(
             eyebrow = "Reports",
             title = "Ergonomic reports",
-            supporting = "Aggregated from the assessments saved on this device."
+            supporting = "Aggregated from the assessments saved on the VigilEx server."
         )
         when {
-            !loaded -> LoadingState()
+            current == null -> LoadingState()
+            current is ApiResult.Error -> BackendErrorState(current, onRetry = { attempt++ })
             report == null -> EmptyState(
                 title = "No report data yet",
                 body = "Complete assessments to begin building your ergonomic reports. " +

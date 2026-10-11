@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from xml.sax.saxutils import escape
 
 from reportlab.graphics.shapes import Circle, Drawing, Line, Rect
 from reportlab.lib import colors
@@ -33,13 +34,32 @@ from reportlab.platypus import (
 
 from app.core.config import get_settings
 from app.models.assessment import Assessment
-from app.schemas.analysis import MethodResult, RegionMeasurement, ReportContent, ReportFinding
-from app.services.analysis_assessments import method_result, overall_risk, region_measurements, video_name
+from app.schemas.analysis import (
+    ComponentRow,
+    ComponentTable,
+    Intervention,
+    MeasurementReliability,
+    MethodResult,
+    ProductRecommendation,
+    RegionMeasurement,
+    ReportContent,
+    ReportFinding,
+)
+from app.services.analysis_assessments import (
+    NOT_MEASURED_NOTE,
+    VIEW_EXPLANATION,
+    intervention_plan,
+    measurement_reliability,
+    method_result,
+    overall_risk,
+    products_for,
+    region_measurements,
+    video_name,
+)
+from app.services.interventions import frequency_word, region_status
 
 # ------------------------------------------------------------ wording rules
 
-CONSISTENT_SHARE = 0.66
-REPEATED_SHARE = 0.2
 MAX_FINDINGS = 3
 MAX_OBSERVATION_REGIONS = 2
 MAX_EVIDENCE_FRAMES = 3
@@ -61,30 +81,72 @@ _GUIDANCE = {
     "very_high": "Ergonomic review is recommended promptly.",
 }
 
+# Main report, in reading order; the product section appears only when a product qualifies.
+PRODUCT_SECTION = "Recommended product to evaluate"
+MAIN_SECTIONS = (
+    "Overall assessment",
+    "Priority action",
+    PRODUCT_SECTION,
+    "Other actions",
+    "Measurements",
+    "Posture evidence",
+    "Camera view and reliability",
+)
+TECHNICAL_SECTION = "Technical details and assessment limitations"
+
+COMPONENT_HEADING = "Component measurements at the peak-score frame"
+COMPONENT_NOTE = (
+    "The overall peak shown in Measurements is the highest observed value across analyzed frames. Component "
+    "angles below are taken from the frame where the RULA or REBA score reached its peak, so they may differ."
+)
+MEASUREMENTS_NOTE = "Average and peak joint angles across all analyzed frames in which each region was observable."
+
 METHODOLOGY = [
-    "VigilEx detects the worker's pose in sampled video frames (YOLO11n-Pose), follows the same worker "
-    "through the video (ByteTrack) and measures joint angles in the side view.",
+    "VigilEx detects the worker's pose in sampled video frames (YOLO11n-Pose) and follows the same worker "
+    "through the video (ByteTrack). Joint angles are measured from the detected 2D landmarks.",
     "RULA and REBA are scored per sampled frame from those angles; this report gives the peak score of each "
     "and how the scored frames were distributed across risk bands.",
+    "Measurements give the average and highest value of each angle across all analyzed frames. Component "
+    "tables give the angles at the single frame where each method reached its peak score.",
 ]
 
 LIMITATIONS = [
     "Wrist posture, wrist twist, force or load, coupling and activity cannot be observed from the video "
-    "and are scored at their lowest-risk values.",
-    "Angles are measured from 2D landmarks in the side view; camera position affects them.",
+    "and are scored at their lowest-risk values. This is not evidence that they were low risk.",
+    VIEW_EXPLANATION,
     "This report describes observed posture. It does not assess injury, pain, fatigue or health, "
     "and findings should be reviewed by a qualified person.",
+    "Recommended interventions are general workplace and posture suggestions based on the observed posture, "
+    "not medical advice.",
 ]
+PRODUCT_LIMITATION = (
+    "Product suggestions are for evaluation only. Product descriptions come from Extrive product material; "
+    "the posture scores in this report are not evidence of a product's effectiveness."
+)
 
 
-def _status(region: RegionMeasurement, overall: str | None) -> str:
-    if region.peak_severity is None:
-        return "not_measured"
-    if region.peak_severity == "ok":
-        return "low"
-    if region.peak_severity == "moderate":
-        return "attention"
-    return "high" if overall in ("high", "very_high") else "elevated"
+def report_sections(has_product: bool) -> list[str]:
+    return [s for s in MAIN_SECTIONS if has_product or s != PRODUCT_SECTION] + [TECHNICAL_SECTION]
+
+
+def methodology(assessment: Assessment) -> list[str]:
+    video = (assessment.capture_metadata or {}).get("video") or {}
+    hz, sampled = video.get("sample_hz"), video.get("frames_sampled")
+    out = list(METHODOLOGY)
+    if hz and sampled:
+        out.insert(1, f"Frames were sampled at {hz:g} per second ({sampled} frames sampled).")
+    return out
+
+
+def limitations(reliability: MeasurementReliability | None, has_product: bool) -> list[str]:
+    out = list(LIMITATIONS)
+    if reliability is not None and reliability.status == "limited":
+        out.insert(2, f"{reliability.title}: {' '.join(reliability.reasons)}")
+    if has_product:
+        out.append(PRODUCT_LIMITATION)
+    return out
+
+_status = region_status
 
 
 def _title(region: RegionMeasurement, status: str) -> str:
@@ -94,11 +156,10 @@ def _title(region: RegionMeasurement, status: str) -> str:
 
 def _detail(region: RegionMeasurement, status: str) -> str:
     if status == "not_measured":
-        return "Not measured in any scored frame."
+        return "Not measured in any scored frame; this is not evidence of low risk."
     if status == "low":
         return f"Stayed within the lowest scoring range in all {region.frames_measured} measured frames."
-    share = region.frames_at_peak_severity / region.frames_measured if region.frames_measured else 0.0
-    word = "consistently" if share >= CONSISTENT_SHARE else "repeatedly" if share >= REPEATED_SHARE else "briefly"
+    word = frequency_word(region.frames_at_peak_severity, region.frames_measured)
     return (
         f"Observed {word} during the analyzed movement: "
         f"{region.frames_at_peak_severity} of {region.frames_measured} measured frames."
@@ -141,6 +202,9 @@ def build_report_content(assessment: Assessment) -> ReportContent:
     overall = overall_risk(rula, reba)
     regions = region_measurements(assessment)
     findings, observation = _findings(regions, overall)
+    back, interventions, summary_text = intervention_plan(assessment, rula, reba)
+    products = products_for(interventions, back)
+    reliability = measurement_reliability(assessment, back, regions)
     video = (assessment.capture_metadata or {}).get("video") or {}
     return ReportContent(
         assessment_id=assessment.id,
@@ -152,11 +216,23 @@ def build_report_content(assessment: Assessment) -> ReportContent:
         rula=rula,
         reba=reba,
         observation=(f"{observation} {_GUIDANCE[overall]}" if observation and overall else observation),
+        action_summary=summary_text,
+        interventions=interventions,
+        product_recommendations=products,
+        measurement_reliability=reliability,
+        back_posture=back,
         findings=findings,
         measurements=regions,
-        evidence_frames=len(evidence_frames(assessment, regions, rula, reba, overall)),
-        methodology=METHODOLOGY,
-        limitations=LIMITATIONS,
+        measurement_note=f"{MEASUREMENTS_NOTE} {NOT_MEASURED_NOTE}",
+        evidence_frames=len(evidence_frames(assessment, regions, rula, reba, overall, interventions)),
+        sections=report_sections(bool(products)),
+        technical_section=TECHNICAL_SECTION,
+        component_note=COMPONENT_NOTE,
+        component_tables=[
+            t for t in (component_table(assessment, rula, "RULA"), component_table(assessment, reba, "REBA")) if t
+        ],
+        methodology=methodology(assessment),
+        limitations=limitations(reliability, bool(products)),
         methodology_version=assessment.methodology_version,
     )
 
@@ -164,6 +240,7 @@ def build_report_content(assessment: Assessment) -> ReportContent:
 # ------------------------------------------------------------ evidence
 
 _REGION_ANGLE = {"trunk": "trunk_deg", "upper_arm": "upper_arm_deg", "knee_flexion": "knee_flexion_deg", "neck": "neck_deg"}
+_METRIC_FOR_AREA = {"back": "trunk", "knees": "knee_flexion", "neck": "neck", "upper_arm": "upper_arm"}
 
 
 def _frame_score(frame: dict[str, Any], method: str) -> int | None:
@@ -176,8 +253,9 @@ def evidence_frames(
     rula: MethodResult | None,
     reba: MethodResult | None,
     overall: str | None,
+    interventions: list[Intervention] | None = None,
 ) -> list[tuple[int, dict[str, Any], str]]:
-    """Peak-score frame of the leading method, the key region's peak-angle frame, the other peak."""
+    """The priority action's peak-angle frame, the leading method's peak-score frame, the other peak."""
     keyframes = (assessment.keypoint_series or {}).get("keyframes", [])
     level = {"negligible": 0, "low": 0, "moderate": 1, "medium": 1, "high": 2, "very_high": 3}
     lead, other = ("RULA", "REBA") if (rula and reba and level.get(rula.risk, 0) > level.get(reba.risk, 0)) else ("REBA", "RULA")
@@ -192,13 +270,20 @@ def evidence_frames(
                 return i, f"Peak {method} {r.score:02d} / {r.scale_max:02d}"
         return None
 
-    candidates = [peak(lead)]
-    flagged = sorted(
-        (r for r in regions if r.peak_severity in ("moderate", "high")),
-        key=lambda r: (-(r.peak_severity == "high"), -(r.frames_at_peak_severity / max(r.frames_measured, 1))),
-    )
-    if flagged:
-        key = flagged[0]
+    key = None
+    if interventions:
+        # The evidence for the priority action comes first.
+        metric = _METRIC_FOR_AREA[interventions[0].area]
+        key = next((r for r in regions if r.metric == metric), None)
+    if key is None:
+        flagged = sorted(
+            (r for r in regions if r.peak_severity in ("moderate", "high")),
+            key=lambda r: (-(r.peak_severity == "high"), -(r.frames_at_peak_severity / max(r.frames_measured, 1))),
+        )
+        key = flagged[0] if flagged else None
+
+    candidates: list[tuple[int, str] | None] = []
+    if key is not None:
         angle_key = _REGION_ANGLE[key.metric]
         best = None
         for i, f in enumerate(keyframes):
@@ -207,7 +292,7 @@ def evidence_frames(
                 best = (i, angle)
         if best:
             candidates.append((best[0], f"Peak {key.label.lower()} {best[1]:.1f}°"))
-    candidates.append(peak(other))
+    candidates += [peak(lead), peak(other)]
 
     seen, out = set(), []
     for c in candidates:
@@ -263,6 +348,8 @@ SUNKEN = colors.HexColor("#EDEDE8")
 GOLD = colors.HexColor("#C9A227")
 GOLD_INK = colors.HexColor("#7A5F00")
 RED = colors.HexColor("#C62828")
+NOTICE = colors.HexColor("#FBF5E0")
+PRODUCT_TINT = colors.HexColor("#F4F4EF")
 
 _ACCENT = {"low": colors.HexColor("#171717"), "moderate": GOLD, "high": RED, "very_high": colors.HexColor("#8E1B1B")}
 _STATUS_COLOR = {"Low": MUTED, "Not measured": MUTED, "Attention": INK, "Elevated": GOLD_INK, "High": RED}
@@ -272,7 +359,7 @@ _label_ink = ParagraphStyle("label_ink", parent=_label, textColor=INK)
 _body = ParagraphStyle("body", fontName="Helvetica", fontSize=9.5, leading=13.5, textColor=SECONDARY)
 _body_ink = ParagraphStyle("body_ink", parent=_body, textColor=INK)
 _lead = ParagraphStyle("lead", fontName="Helvetica", fontSize=12.5, leading=17, textColor=INK)
-_title = ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=24, leading=28, textColor=INK)
+_title_style = ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=24, leading=28, textColor=INK)
 _section = ParagraphStyle("section", fontName="Helvetica", fontSize=26, leading=28, textColor=INK)
 _small = ParagraphStyle("small", fontName="Helvetica", fontSize=8, leading=11, textColor=MUTED)
 _right = ParagraphStyle("right", parent=_body_ink, alignment=TA_RIGHT)
@@ -325,6 +412,83 @@ def _pose(frame: dict[str, Any], width: float, fw: int, fh: int) -> Drawing:
     return d
 
 
+_COMPONENT_ORDER = ("upper_arm", "lower_arm", "wrist", "wrist_twist", "neck", "trunk", "legs")
+_AREA_LABEL = {"back": "BACK / TRUNK", "knees": "KNEES", "neck": "NECK", "upper_arm": "UPPER ARM"}
+
+
+def component_table(assessment: Assessment, result: MethodResult | None, method: str) -> ComponentTable | None:
+    """The method's components at the first frame that reached its peak score."""
+    if result is None or result.score is None:
+        return None
+    for index, frame in enumerate((assessment.keypoint_series or {}).get("keyframes", [])):
+        scored = frame.get(method.lower()) or {}
+        if scored.get("score") != result.score:
+            continue
+        components = scored.get("components") or {}
+        rows = []
+        # JSONB does not keep key order; list components head-to-toe as the methods do.
+        for key in sorted(components, key=lambda k: _COMPONENT_ORDER.index(k) if k in _COMPONENT_ORDER else len(_COMPONENT_ORDER)):
+            c = components[key]
+            measured = bool(c.get("measured"))
+            rows.append(ComponentRow(
+                name=c.get("name") or key.replace("_", " ").capitalize(),
+                measured=measured,
+                angle_deg=c.get("angle_deg") if measured else None,
+                band=c.get("band") if measured else None,
+                max_band=c.get("max_band") if measured else None,
+            ))
+        return ComponentTable(
+            method=method,
+            title=f"{method} — {COMPONENT_HEADING.lower()}",
+            score=result.score,
+            scale_max=result.scale_max,
+            frame_number=index + 1,
+            frame_time_sec=frame.get("t"),
+            rows=rows,
+        )
+    return None
+
+
+def _product_block(product: ProductRecommendation, width: float, panel, bullets) -> Table:
+    """The recommended product to evaluate: tied to the finding, then what it is, then how to evaluate it."""
+    head = " · ".join(p for p in (product.maker, product.category) if p).upper()
+    parts: list[Any] = [
+        Paragraph(escape(head), _label),
+        Spacer(1, 4),
+        Paragraph(escape(product.headline), ParagraphStyle("product", fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=INK)),
+        Spacer(1, 8),
+        Paragraph(escape(product.rationale), _body_ink),
+        Spacer(1, 10),
+    ]
+    if product.content_status == "verified":
+        parts += [
+            Paragraph("WHY IT MAY HELP", _label_ink),
+            Spacer(1, 3),
+            Paragraph(escape(f"{product.intended_use} {product.operating_principle}"), _body_ink),
+            Spacer(1, 4),
+            Paragraph(escape("Relevant tasks: " + "; ".join(t[0].lower() + t[1:] for t in product.task_types) + "."), _body),
+            Spacer(1, 10),
+        ]
+    else:
+        parts += [
+            Paragraph("PRODUCT INFORMATION PENDING", ParagraphStyle("pending", parent=_label_ink, textColor=GOLD_INK)),
+            Spacer(1, 3),
+            Paragraph(escape(f"Missing approved content: {', '.join(product.content_gaps)}."), _body),
+            Spacer(1, 10),
+        ]
+    parts += [Paragraph("BEST RESULTS COME FROM COMBINING APPROACHES", _label_ink), Spacer(1, 3)]
+    parts += bullets(product.complementary_actions)
+    parts += [Spacer(1, 10), Paragraph("BEFORE INTRODUCING IT", _label_ink), Spacer(1, 3)]
+    parts += bullets(product.suitability)
+    parts += [Spacer(1, 10)]
+    if product.evidence_note:
+        parts += [Paragraph(escape(product.evidence_note), _body), Spacer(1, 4)]
+    parts += [Paragraph(escape(product.qualification), _body)]
+    if product.sources:
+        parts += [Spacer(1, 6), Paragraph(escape("Product information: " + "; ".join(product.sources) + "."), _small)]
+    return panel(parts, INK, PRODUCT_TINT)
+
+
 def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> None:
     width = A4[0] - 36 * mm
     doc = SimpleDocTemplate(
@@ -356,11 +520,13 @@ def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> 
 
     story: list[Any] = []
 
-    def section(number: int, name: str):
-        story.append(CondPageBreak(60 * mm))
+    def section(number: int | None, name: str, keep_with_next: float = 60 * mm):
+        """A numbered main section, or the lettered technical appendix when number is None."""
+        story.append(CondPageBreak(keep_with_next))
         story.append(_Rule(width, 1, INK))
         story.append(Spacer(1, 6))
-        story.append(Table([[Paragraph(f"{number:02d}", _section), Paragraph(name.upper(), _label_ink)]],
+        mark = "A" if number is None else f"{number:02d}"
+        story.append(Table([[Paragraph(mark, _section), Paragraph(name.upper(), _label_ink)]],
                            colWidths=[22 * mm, width - 22 * mm],
                            style=[("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
         story.append(Spacer(1, 10))
@@ -393,7 +559,7 @@ def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> 
         return "—" if v is None else f"{v:.1f}°"
 
     # Title block
-    story.append(Paragraph("Ergonomic assessment", _title))
+    story.append(Paragraph("Ergonomic assessment", _title_style))
     story.append(Spacer(1, 8))
     meta = [
         ["VIDEO", content.video_name or "—"],
@@ -408,14 +574,46 @@ def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> 
     ]))
     story.append(Spacer(1, 18))
 
-    # 01 Executive assessment
-    section(1, "Executive assessment")
-    story.append(Paragraph("ERGONOMIC RISK", _label))
-    risk_word = (content.overall_risk or "not measured").replace("_", " ").upper()
-    risk_color = RED if content.overall_risk in ("high", "very_high") else INK
-    story.append(Paragraph(risk_word, ParagraphStyle("risk", fontName="Helvetica-Bold", fontSize=38, leading=44, textColor=risk_color)))
-    story.append(Spacer(1, 4))
-    story.append(_Rule(width, 0.8, INK, accent=_ACCENT.get(content.overall_risk, HAIRLINE)))
+    overall = content.overall_risk
+    primary = content.interventions[0] if content.interventions else None
+    others = content.interventions[1:]
+    product = content.product_recommendations[0] if content.product_recommendations else None
+    reliability = content.measurement_reliability
+    limited = reliability is not None and reliability.status == "limited"
+    numbers = {name: i for i, name in enumerate(content.sections, start=1)}
+
+    def numbered(name: str, keep_with_next: float = 60 * mm):
+        section(numbers[name], name, keep_with_next)
+
+    def panel(flowables: list, accent, background=SUNKEN):
+        """A tinted block with an accent bar on the left."""
+        return Table(
+            [["", flowables]],
+            colWidths=[3, width - 3],
+            style=[
+                ("BACKGROUND", (0, 0), (0, 0), accent),
+                ("BACKGROUND", (1, 0), (1, 0), background),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (0, 0), 0),
+                ("RIGHTPADDING", (0, 0), (0, 0), 0),
+                ("LEFTPADDING", (1, 0), (1, 0), 14),
+                ("RIGHTPADDING", (1, 0), (1, 0), 14),
+                ("TOPPADDING", (1, 0), (1, 0), 12),
+                ("BOTTOMPADDING", (1, 0), (1, 0), 14),
+            ],
+        )
+
+    def bullets(items: list[str]) -> list:
+        return [Paragraph(f"&bull;&nbsp; {escape(t)}", _body_ink) for t in items]
+
+    # 01 Overall assessment: how risky, in one glance.
+    numbered("Overall assessment")
+    risk_word = (overall or "not measured").replace("_", " ").upper()
+    risk_color = RED if overall in ("high", "very_high") else INK
+    story.append(Paragraph(risk_word, ParagraphStyle("risk", fontName="Helvetica-Bold", fontSize=38, leading=42, textColor=risk_color)))
+    story.append(Paragraph("ERGONOMIC RISK", ParagraphStyle("risk_sub", parent=_label_ink, fontSize=10, leading=14)))
+    story.append(Spacer(1, 6))
+    story.append(_Rule(width, 0.8, INK, accent=_ACCENT.get(overall, HAIRLINE)))
     rows = []
     for name, r in (("RULA", content.rula), ("REBA", content.reba)):
         if r is None:
@@ -423,55 +621,76 @@ def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> 
         else:
             rows.append([name, f"{r.score:02d} / {r.scale_max:02d}", (r.risk or "—").replace("_", " ").capitalize()])
     story.append(table(rows, [0.2, 0.3, 0.5], header=False))
-    if content.observation:
+    if content.action_summary:
         story.append(Spacer(1, 10))
-        story.append(Paragraph("PRIMARY OBSERVATION", _label))
-        story.append(Spacer(1, 3))
-        story.append(Paragraph(content.observation, _lead))
+        story.append(Paragraph(content.action_summary, _lead))
+    if limited:
+        # Near the findings, so no result is read without its limitation.
+        story.append(Spacer(1, 12))
+        story.append(panel([
+            Paragraph(reliability.title.upper(), ParagraphStyle("notice", parent=_label_ink, textColor=GOLD_INK)),
+            Spacer(1, 4),
+            *[Paragraph(escape(r), _body_ink) for r in reliability.reasons],
+            Spacer(1, 4),
+            Paragraph(escape(reliability.recommendation or ""), _body),
+        ], GOLD, NOTICE))
     story.append(Spacer(1, 18))
 
-    # 02 Key findings
-    section(2, "Key ergonomic findings")
-    if content.findings:
-        rows = [["", "FINDING", "STATUS"]]
-        for i, f in enumerate(content.findings, start=1):
-            rows.append([f"{i:02d}", Paragraph(f"<b>{f.title}</b><br/>{f.detail}", _body_ink), f.status])
-        story.append(table(rows, [0.08, 0.72, 0.2], status_col=2))
+    # 02 Priority action: the one thing to act on first.
+    numbered("Priority action")
+    if primary is None:
+        story.append(Paragraph("No body region was flagged often enough to need a specific action.", _body))
     else:
-        story.append(Paragraph("No body region could be measured.", _body))
+        accent = RED if primary.status == "high" else GOLD
+        story.append(panel([
+            Paragraph(_AREA_LABEL[primary.area], _label),
+            Spacer(1, 4),
+            Paragraph(primary.title.upper(), ParagraphStyle("hero", fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=INK)),
+            Spacer(1, 8),
+            Paragraph(primary.recommendation, _lead),
+            Spacer(1, 8),
+            Paragraph(primary.observation, _body),
+            Spacer(1, 6),
+            Paragraph(f"Status: {_STATUS_LABEL[primary.status]}", ParagraphStyle("hero_status", parent=_label, textColor=_STATUS_COLOR[_STATUS_LABEL[primary.status]])),
+        ], accent))
     story.append(Spacer(1, 18))
 
-    # 03 RULA / REBA results
-    section(3, "RULA / REBA results")
-    for r in (content.rula, content.reba):
-        if r is None:
-            continue
-        name = "RULA" if r.scale_max == 7 else "REBA"
-        dist = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in r.risk_distribution.items() if v) or "—"
-        story.append(KeepTogether([
-            Paragraph(f"<b>{name}</b> &nbsp; {r.score:02d} / {r.scale_max:02d} · {(r.risk or '—').replace('_', ' ')} risk", _body_ink),
-            Spacer(1, 3),
-            Paragraph(f"{r.frames_scored} frames scored. Frames by risk band: {dist}.", _body),
-            Spacer(1, 10),
-        ]))
-    story.append(Paragraph("Scores are the peak per-frame score reported by the VigilEx pipeline.", _small))
+    # 03 Recommended product to evaluate: only when a finding qualifies.
+    if product is not None:
+        numbered(PRODUCT_SECTION, keep_with_next=90 * mm)
+        story.append(_product_block(product, width, panel, bullets))
+        story.append(Spacer(1, 18))
+
+    # Other actions: concise, only regions with evidence.
+    numbered("Other actions")
+    if not others:
+        story.append(Paragraph("No other body region needed action.", _body))
+    else:
+        rows = [["", "ACTION", "STATUS"]]
+        for i, item in enumerate(others, start=1):
+            rows.append([
+                f"{i:02d}",
+                Paragraph(f"<b>{item.title.upper()}</b><br/>{item.recommendation}<br/><font color='#8C8C85'>{item.observation}</font>", _body_ink),
+                _STATUS_LABEL[item.status],
+            ])
+        story.append(table(rows, [0.08, 0.72, 0.2], status_col=2))
     story.append(Spacer(1, 18))
 
-    # 04 Measurements
-    section(4, "Biomechanical measurements")
-    overall = content.overall_risk
-    rows = [["REGION", "AVG", "MAX", "STATUS"]]
+    # Measurements: averages and overall peaks across all analyzed frames.
+    numbered("Measurements")
+    rows = [["REGION", "AVERAGE", "PEAK", "STATUS"]]
     for m in content.measurements:
-        rows.append([m.label, deg(m.average_deg), deg(m.maximum_deg), _STATUS_LABEL[_status(m, overall)]])
+        label = "Back / trunk" if m.metric == "trunk" else m.label
+        rows.append([label, deg(m.average_deg), deg(m.maximum_deg), _STATUS_LABEL[_status(m, overall)]])
     story.append(table(rows, [0.4, 0.18, 0.18, 0.24], status_col=3))
     story.append(Spacer(1, 4))
-    story.append(Paragraph("Joint angles in degrees across the frames where each region was measured.", _small))
+    story.append(Paragraph(content.measurement_note, _small))
     story.append(Spacer(1, 18))
 
-    # 05 Posture evidence
-    frames = evidence_frames(assessment, content.measurements, content.rula, content.reba, overall)
+    # Posture evidence. The heading stays with its images.
+    numbered("Posture evidence", keep_with_next=110 * mm)
+    frames = evidence_frames(assessment, content.measurements, content.rula, content.reba, overall, content.interventions)
     if frames:
-        section(5, "Posture evidence")
         video = (assessment.capture_metadata or {}).get("video") or {}
         fw, fh = int(video.get("width") or 0), int(video.get("height") or 0)
         cell = (width - 8 * mm) / 2
@@ -489,18 +708,87 @@ def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> 
             ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
         ]))
         story.append(Paragraph("Detected pose from the stored landmarks. The original video is not retained by the server.", _small))
-        story.append(Spacer(1, 18))
+    else:
+        story.append(Paragraph("No scored frame is available to show.", _body))
+    story.append(Spacer(1, 18))
 
-    # 06 Methodology and limitations
-    section(6, "Methodology and limitations")
+    # Camera view and reliability.
+    numbered("Camera view and reliability")
+    if reliability is not None:
+        story.append(Paragraph(escape(reliability.explanation), _body_ink))
+        story.append(Spacer(1, 8))
+        rows = [
+            ["Measured frames filmed close to side-on", "—" if reliability.side_on_fraction is None else f"{reliability.side_on_fraction * 100:.0f}%"],
+            ["Sampled frames with the worker detected", "—" if reliability.detection_fraction is None else f"{reliability.detection_fraction * 100:.0f}%"],
+        ]
+        story.append(table(rows, [0.75, 0.25], header=False))
+        story.append(Spacer(1, 8))
+        if limited:
+            story.append(Paragraph(reliability.title.upper(), ParagraphStyle("notice2", parent=_label_ink, textColor=GOLD_INK)))
+            story.append(Spacer(1, 3))
+            for text in reliability.reasons:
+                story.append(Paragraph(escape(text), _body))
+                story.append(Spacer(1, 3))
+            story.append(Paragraph(escape(reliability.recommendation or ""), _body_ink))
+        else:
+            story.append(Paragraph(
+                "No camera-view limitation was detected by these checks. This is not a confidence rating; "
+                "the limitations above still apply.",
+                _body,
+            ))
+    story.append(Spacer(1, 18))
+
+    # Technical details and assessment limitations: an appendix for professional review.
+    section(None, content.technical_section)
+    story.append(Paragraph("RULA / REBA SCORES", _label_ink))
+    story.append(Spacer(1, 4))
+    for method, r in (("RULA", content.rula), ("REBA", content.reba)):
+        if r is None:
+            continue
+        dist = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in r.risk_distribution.items() if v) or "—"
+        story.append(Paragraph(
+            f"<b>{method}</b> &nbsp; {r.score:02d} / {r.scale_max:02d} · {(r.risk or '—').replace('_', ' ')} risk. "
+            f"{r.frames_scored} frames scored. Frames by risk band: {dist}.",
+            _body,
+        ))
+        story.append(Spacer(1, 4))
+    story.append(Paragraph(
+        "Scores are the peak per-frame score reported by the VigilEx pipeline; band is the component's score "
+        "within its range.",
+        _small,
+    ))
+    story.append(Spacer(1, 12))
+    if content.component_tables:
+        story.append(Paragraph(COMPONENT_HEADING.upper(), _label_ink))
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(escape(content.component_note), _body_ink))
+        story.append(Spacer(1, 8))
+        for t in content.component_tables:
+            at = f"frame {t.frame_number}" + ("" if t.frame_time_sec is None else f" · {t.frame_time_sec:.1f} s")
+            rows = [["COMPONENT", "ANGLE", "BAND"]] + [
+                [
+                    c.name,
+                    deg(c.angle_deg) if c.measured else "Not observable",
+                    f"{c.band} / {c.max_band}" if c.measured and c.band is not None else "—",
+                ]
+                for c in t.rows
+            ]
+            story.append(KeepTogether([
+                Paragraph(f"<b>{escape(t.title)}</b> &nbsp; score {t.score:02d} / {t.scale_max:02d} · {at}", _body_ink),
+                Spacer(1, 3),
+                table(rows, [0.5, 0.25, 0.25]),
+                Spacer(1, 12),
+            ]))
+    story.append(Paragraph("METHODOLOGY", _label_ink))
+    story.append(Spacer(1, 3))
     for text in content.methodology:
-        story.append(Paragraph(text, _body))
+        story.append(Paragraph(escape(text), _body))
         story.append(Spacer(1, 4))
     story.append(Spacer(1, 6))
-    story.append(Paragraph("LIMITATIONS", _label))
+    story.append(Paragraph("LIMITATIONS", _label_ink))
     story.append(Spacer(1, 3))
     for text in content.limitations:
-        story.append(Paragraph(text, _body))
+        story.append(Paragraph(escape(text), _body))
         story.append(Spacer(1, 4))
     story.append(Spacer(1, 6))
     story.append(Paragraph(f"Methodology version: {content.methodology_version}", _small))

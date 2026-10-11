@@ -39,7 +39,7 @@ ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".3gp", ".mkv", ".webm"}
 def analyze_video(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    owner: User | None = Depends(get_current_user),
+    owner: User = Depends(get_current_user),
 ) -> dict:
     """
     Runs the CV pipeline on an uploaded video and returns the process_video()

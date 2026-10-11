@@ -24,8 +24,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -41,11 +41,15 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.extrive.vigilex.data.insight.Interpretation
 import com.extrive.vigilex.data.insight.interpret
+import com.extrive.vigilex.data.api.ApiResult
+import com.extrive.vigilex.data.api.ErrorKind
 import com.extrive.vigilex.data.model.AnalysisResult
-import com.extrive.vigilex.data.store.AssessmentStore
+import com.extrive.vigilex.data.model.AssessmentRecord
+import com.extrive.vigilex.data.model.ReportContentDto
+import com.extrive.vigilex.data.repository.AssessmentRepository
+import com.extrive.vigilex.ui.components.BackendErrorState
 import com.extrive.vigilex.ui.components.BottomActionBar
 import com.extrive.vigilex.ui.components.ButtonRow
-import com.extrive.vigilex.ui.components.EmptyState
 import com.extrive.vigilex.ui.components.ErrorState
 import com.extrive.vigilex.ui.components.Hairline
 import com.extrive.vigilex.ui.components.IndeterminateTrack
@@ -66,7 +70,6 @@ import com.extrive.vigilex.ui.theme.Red
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
 import java.io.File
-import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -75,61 +78,91 @@ import kotlinx.coroutines.withContext
 /** Keeps the preparing state on screen long enough to read, so it never flashes. */
 private const val MIN_PREPARING_MS = 700L
 
-private enum class Stage { INTRO, PREPARING, READY, FAILED }
+private enum class Stage { CHECKING, INTRO, PREPARING, READY, FAILED }
 
 private sealed interface Source {
     data object Loading : Source
-    data object Missing : Source
-    data class Ready(val result: AnalysisResult, val interpretation: Interpretation) : Source
+    data class Failed(val error: ApiResult.Error) : Source
+    data class Ready(
+        val record: AssessmentRecord,
+        val result: AnalysisResult,
+        val interpretation: Interpretation
+    ) : Source
 }
 
 /**
  * Turns an assessment into a document: what the report contains, one action,
  * a calm preparing state, then the report itself with export and share.
+ * The server generates the PDF from the stored assessment; the preview is
+ * drawn from the same stored analysis.
  */
 @Composable
 fun ReportScreen(id: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val records by AssessmentStore.records.collectAsState()
-    val loaded by AssessmentStore.loaded.collectAsState()
-    val record = records.firstOrNull { it.id == id }
     val compact = LocalWindowClass.current == WindowClass.COMPACT
-    val service = remember { PdfReportService(context.applicationContext) }
+    val repository = remember { AssessmentRepository() }
+    val service = remember { ReportService(context.applicationContext, repository) }
 
+    var attempt by remember(id) { mutableIntStateOf(0) }
     var source by remember(id) { mutableStateOf<Source>(Source.Loading) }
-    LaunchedEffect(id, loaded) {
-        if (!loaded) return@LaunchedEffect
-        source = AssessmentStore.loadResult(id)?.let { Source.Ready(it, interpret(it)) } ?: Source.Missing
+    LaunchedEffect(id, attempt) {
+        source = Source.Loading
+        source = when (val detail = repository.detail(id)) {
+            is ApiResult.Success -> Source.Ready(detail.data.record, detail.data.result, interpret(detail.data.result))
+            is ApiResult.Error -> Source.Failed(detail)
+        }
     }
 
-    var stage by rememberSaveable(id) { mutableStateOf(Stage.INTRO) }
+    var stage by rememberSaveable(id) { mutableStateOf(Stage.CHECKING) }
     var reportPath by rememberSaveable(id) { mutableStateOf<String?>(null) }
     var pageCount by rememberSaveable(id) { mutableStateOf(0) }
+    var failure by rememberSaveable(id) { mutableStateOf<Pair<String, String>?>(null) }
     var exportNote by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+    // What the server built the PDF from; the preview shows exactly this.
+    var content by remember(id) { mutableStateOf<ReportContentDto?>(null) }
     val reportFile = reportPath?.let(::File)?.takeIf { it.exists() }
-    // A report from a previous session may have been cleared from the cache.
-    if (stage == Stage.READY && reportFile == null && reportPath != null) stage = Stage.INTRO
+    // A report from a previous session may have been cleared from the cache,
+    // and its content is not kept across process restarts: fetch it again.
+    if (stage == Stage.READY && (reportFile == null || content == null)) stage = Stage.CHECKING
 
     val ready = source as? Source.Ready
+    val record = ready?.record
+
+    // A report generated earlier is shown straight away (GET /assessments/{id}/report).
+    LaunchedEffect(id, stage, ready != null) {
+        if (stage != Stage.CHECKING || ready == null) return@LaunchedEffect
+        val existing = service.existing(id)
+        if (existing != null) {
+            reportPath = existing.file.absolutePath
+            pageCount = existing.pageCount
+            content = existing.metadata.content
+            stage = Stage.READY
+        } else {
+            stage = Stage.INTRO
+        }
+    }
 
     fun generate() {
-        val r = record ?: return
-        val s = ready ?: return
+        if (ready == null) return
         stage = Stage.PREPARING
         exportNote = null
+        failure = null
         scope.launch {
             val started = System.currentTimeMillis()
-            try {
-                val report = service.generate(r, s.result, s.interpretation)
-                delay((MIN_PREPARING_MS - (System.currentTimeMillis() - started)).coerceAtLeast(0))
-                reportPath = report.file.absolutePath
-                pageCount = report.pageCount
-                stage = Stage.READY
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                stage = Stage.FAILED
+            val outcome = service.generate(id)
+            delay((MIN_PREPARING_MS - (System.currentTimeMillis() - started)).coerceAtLeast(0))
+            when (outcome) {
+                is ReportOutcome.Ready -> {
+                    reportPath = outcome.report.file.absolutePath
+                    pageCount = outcome.report.pageCount
+                    content = outcome.report.metadata.content
+                    stage = Stage.READY
+                }
+                is ReportOutcome.Failed -> {
+                    failure = failureText(outcome)
+                    stage = Stage.FAILED
+                }
             }
         }
     }
@@ -157,33 +190,42 @@ fun ReportScreen(id: String, onBack: () -> Unit) {
                 meta = record?.let { "${it.fileName} · ${formatDateTime(it.createdAtMillis)}" },
                 onBack = onBack
             )
+            val loading = source
             when {
-                source is Source.Loading -> LoadingState()
-                source is Source.Missing || record == null -> EmptyState(
-                    title = "Assessment not found",
-                    body = "This assessment is not saved on this device, so no report can be made from it."
+                loading is Source.Loading -> LoadingState()
+                loading is Source.Failed -> BackendErrorState(
+                    loading.error,
+                    onRetry = { attempt++ },
+                    notFoundTitle = "Assessment not found",
+                    notFoundMessage = "This assessment is not on the VigilEx server, so no report can be made from it."
                 )
-                ready != null -> AnimatedContent(
+                ready != null && record != null -> AnimatedContent(
                     targetState = stage,
                     transitionSpec = { fadeIn(tween(Motion.base)) togetherWith fadeOut(tween(Motion.fast)) },
                     label = "report"
                 ) { current ->
                     Column(Modifier.fillMaxWidth()) {
                         when (current) {
-                            Stage.INTRO -> Intro(onGenerate = ::generate)
+                            Stage.CHECKING -> LoadingState()
+                            Stage.INTRO -> Intro(
+                                sections = reportSections(record.primaryProduct != null),
+                                onGenerate = ::generate
+                            )
                             Stage.PREPARING -> Preparing()
                             Stage.FAILED -> ErrorState(
-                                title = "Report not created",
-                                message = "VigilEx could not create the report on this device. Check free storage and try again.",
+                                title = failure?.first ?: "Report not created",
+                                message = failure?.second ?: "VigilEx could not create the report. Try again.",
                                 actions = { PrimaryButton("Try again", onClick = ::generate) }
                             )
-                            Stage.READY -> Preview(
-                                pageCount = pageCount,
-                                showActions = !compact,
-                                note = exportNote,
-                                onExport = export,
-                                onShare = share
-                            ) { ReportDocument(record, ready.result, ready.interpretation) }
+                            Stage.READY -> content?.let { built ->
+                                Preview(
+                                    pageCount = pageCount,
+                                    showActions = !compact,
+                                    note = exportNote,
+                                    onExport = export,
+                                    onShare = share
+                                ) { ReportDocument(record, ready.result, ready.interpretation, built) }
+                            } ?: LoadingState()
                         }
                     }
                 }
@@ -203,8 +245,24 @@ fun ReportScreen(id: String, onBack: () -> Unit) {
     }
 }
 
+private fun failureText(failure: ReportOutcome.Failed): Pair<String, String> {
+    val error = failure.error
+    val title = when {
+        failure.generated -> "PDF not downloaded"
+        error.kind == ErrorKind.UNREACHABLE -> "Server unavailable"
+        error.kind == ErrorKind.TIMEOUT -> "Server not responding"
+        else -> "Report not created"
+    }
+    val message = when {
+        failure.generated -> "The report was created on the server, but the PDF could not be downloaded. ${error.message}"
+        error.kind == ErrorKind.SERVER -> "The VigilEx server could not create the report. ${error.detail ?: "Try again."}"
+        else -> error.message
+    }
+    return title to message
+}
+
 @Composable
-private fun Intro(onGenerate: () -> Unit) {
+private fun Intro(sections: List<String>, onGenerate: () -> Unit) {
     Column(Modifier.widthIn(max = 640.dp)) {
         Text("GENERATE REPORT", style = VxType.label, color = InkMuted)
         Spacer(Modifier.height(Space.sm))
@@ -219,9 +277,10 @@ private fun Intro(onGenerate: () -> Unit) {
         Text("YOUR REPORT WILL INCLUDE", style = VxType.label, color = Ink)
         Spacer(Modifier.height(Space.xs))
         Hairline(color = Ink)
-        ReportSections.forEachIndexed { i, name ->
+        sections.forEachIndexed { i, name ->
             Row(Modifier.padding(vertical = Space.md), verticalAlignment = Alignment.CenterVertically) {
-                Text("%02d".format(i + 1), style = VxType.mono, color = InkMuted, modifier = Modifier.width(48.dp))
+                val mark = if (i == sections.lastIndex) "A" else "%02d".format(i + 1)
+                Text(mark, style = VxType.mono, color = InkMuted, modifier = Modifier.width(48.dp))
                 Text(name, style = VxType.title, color = Ink)
             }
             Hairline()
@@ -229,7 +288,7 @@ private fun Intro(onGenerate: () -> Unit) {
         Spacer(Modifier.height(Space.xl))
         PrimaryButton("Generate report", onClick = onGenerate)
         Spacer(Modifier.height(Space.sm))
-        Text("PDF · A4 · created on this device", style = VxType.mono, color = InkMuted)
+        Text("PDF · A4 · created by the VigilEx server", style = VxType.mono, color = InkMuted)
     }
 }
 

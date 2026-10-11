@@ -14,14 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from app.api.deps import get_current_user
 from app.cv import batch_processor
 from app.cv.posture import _reba_risk_level, _rula_risk_level
-from app.main import app
 from app.models.assessment import Assessment
-from app.models.organization import Organization
-from app.models.user import User
 from app.services import analysis_assessments as analyses
+from conftest import client_for, make_user
 
 VIDEO = Path(__file__).resolve().parent / "19832490-hd_1920_1080_25fps (1).mp4"
 ORIGINAL_KEYS = {"methodology_version", "video", "worker", "quality", "derived_angles", "rula", "reba", "keyframes", "meta"}
@@ -34,7 +31,12 @@ def real_result() -> dict:
     return batch_processor.process_video(video_path=str(VIDEO))
 
 
-def _save(db, result: dict, *, owner=None, created_at=None, name="clip.mp4") -> Assessment:
+_DEFAULT = object()
+
+
+def _save(db, result: dict, *, owner=_DEFAULT, created_at=None, name="clip.mp4") -> Assessment:
+    """Saves [result] as an assessment of [owner]: the default test account unless given (None = unowned)."""
+    owner = make_user(db) if owner is _DEFAULT else owner
     record = analyses.start_analysis(db, file_name=name, content_type="video/mp4", size_bytes=1, owner=owner)
     failure = analyses.complete_analysis(db, record, copy.deepcopy(result))
     if created_at is not None:
@@ -131,8 +133,8 @@ def test_video_without_scoreable_worker_is_not_a_completed_assessment(client, db
     assert client.get("/api/v1/assessments").json()["total"] == 0
 
 
-def test_stale_in_progress_analysis_is_expired(client, db):
-    record = analyses.start_analysis(db, file_name="x.mp4", content_type=None, size_bytes=1, owner=None)
+def test_stale_in_progress_analysis_is_expired(client, db, user):
+    record = analyses.start_analysis(db, file_name="x.mp4", content_type=None, size_bytes=1, owner=user)
     record.created_at = datetime.now(timezone.utc) - analyses.PROCESSING_TIMEOUT - timedelta(minutes=1)
     db.commit()
 
@@ -167,10 +169,10 @@ def test_empty_history(client):
     assert client.get("/api/v1/assessments").json() == {"items": [], "total": 0, "limit": 20, "offset": 0}
 
 
-def test_history_lists_completed_newest_first_with_pagination(client, db, real_result):
+def test_history_lists_completed_newest_first_with_pagination(client, db, user, real_result):
     now = datetime.now(timezone.utc)
     ids = [_save(db, real_result, created_at=now - timedelta(days=d), name=f"v{d}.mp4").id for d in (3, 1, 2)]
-    failed = analyses.start_analysis(db, file_name="bad.mp4", content_type=None, size_bytes=1, owner=None)
+    failed = analyses.start_analysis(db, file_name="bad.mp4", content_type=None, size_bytes=1, owner=user)
     analyses.fail_analysis(db, failed, analyses.AnalyzeFailure(stage="analysis", message="x"))
 
     page = client.get("/api/v1/assessments?limit=2").json()
@@ -183,6 +185,7 @@ def test_history_lists_completed_newest_first_with_pagination(client, db, real_r
     assert item["reba"]["score"] == real_result["reba"]["max_score"]
     assert item["overall_risk"] in ("low", "moderate", "high", "very_high")
     assert item["duration_sec"] == real_result["video"]["duration_sec"]
+    assert item["derived_angles"] == real_result["derived_angles"]
 
     # Failed analyses are not history, but can be asked for explicitly.
     assert client.get("/api/v1/assessments?status=failed").json()["total"] == 1
@@ -277,9 +280,9 @@ def test_report_is_deterministic(client, db, real_result):
     assert first.json()["content"] == second.json()["content"]
 
 
-def test_report_for_missing_or_incomplete_assessment(client, db):
+def test_report_for_missing_or_incomplete_assessment(client, db, user):
     assert client.post(f"/api/v1/assessments/{uuid.uuid4()}/report").status_code == 404
-    pending = analyses.start_analysis(db, file_name="x.mp4", content_type=None, size_bytes=1, owner=None)
+    pending = analyses.start_analysis(db, file_name="x.mp4", content_type=None, size_bytes=1, owner=user)
     response = client.post(f"/api/v1/assessments/{pending.id}/report")
     assert response.status_code == 400
     assert response.json()["detail"] == "Reports can only be generated for completed assessments."
@@ -287,29 +290,20 @@ def test_report_for_missing_or_incomplete_assessment(client, db):
 
 # ============================================================ ownership
 
-def test_users_only_see_their_own_assessments(client, db, real_result):
-    org = Organization(name="Org")
-    db.add(org)
-    db.commit()
-    alice = User(organization_id=org.id, name="A", email="a@example.com")
-    bob = User(organization_id=org.id, name="B", email="b@example.com")
-    db.add_all([alice, bob])
-    db.commit()
-
+def test_users_only_see_their_own_assessments(db, real_result):
+    alice = make_user(db, "a@example.com", "A")
+    bob = make_user(db, "b@example.com", "B")
     mine = _save(db, real_result, owner=alice)
     theirs = _save(db, real_result, owner=bob)
 
-    app.dependency_overrides[get_current_user] = lambda: alice
-    try:
-        assert client.get(f"/api/v1/assessments/{mine.id}").status_code == 200
-        assert client.get(f"/api/v1/assessments/{theirs.id}").status_code == 404
-        assert client.post(f"/api/v1/assessments/{theirs.id}/report").status_code == 404
-        assert client.delete(f"/api/v1/assessments/{theirs.id}").status_code == 404
-        listed = client.get("/api/v1/assessments").json()
-        assert [i["id"] for i in listed["items"]] == [str(mine.id)]
-        assert client.get("/api/v1/overview").json()["total_assessments"] == 1
-    finally:
-        app.dependency_overrides.pop(get_current_user, None)
+    client = client_for(alice)
+    assert client.get(f"/api/v1/assessments/{mine.id}").status_code == 200
+    assert client.get(f"/api/v1/assessments/{theirs.id}").status_code == 404
+    assert client.post(f"/api/v1/assessments/{theirs.id}/report").status_code == 404
+    assert client.delete(f"/api/v1/assessments/{theirs.id}").status_code == 404
+    listed = client.get("/api/v1/assessments").json()
+    assert [i["id"] for i in listed["items"]] == [str(mine.id)]
+    assert client.get("/api/v1/overview").json()["total_assessments"] == 1
 
 
 # ============================================================ migrations
@@ -324,3 +318,72 @@ def test_downgrade_refuses_to_invent_a_hierarchy(alembic_run, db, real_result):
     db.close()
     with pytest.raises(RuntimeError, match="Cannot downgrade"):
         alembic_run("downgrade", "b7c3e1f9a2d4")
+
+
+# ===================================================== real end-to-end flow
+
+def test_real_video_full_flow_has_one_source_of_truth(client, real_result):
+    """analyze -> detail -> history -> overview -> report -> PDF, all over HTTP,
+    all reporting the scores the CV pipeline produced for the real video."""
+    with open(VIDEO, "rb") as f:
+        analyzed = client.post("/api/v1/analyze-video", files={"file": (VIDEO.name, f, "video/mp4")})
+    assert analyzed.status_code == 200
+    body = analyzed.json()
+    assessment_id = body["assessment_id"]
+    assert assessment_id is not None
+
+    rula, reba = body["rula"]["max_score"], body["reba"]["max_score"]
+    # The pipeline is deterministic on the same video.
+    assert (rula, reba) == (real_result["rula"]["max_score"], real_result["reba"]["max_score"])
+    rula_risk, reba_risk = _rula_risk_level(rula), _reba_risk_level(reba)
+
+    detail = client.get(f"/api/v1/assessments/{assessment_id}").json()
+    assert detail["status"] == "completed"
+    stored = detail["analysis"]
+    assert {k: v for k, v in stored.items() if k != "meta"} == {k: v for k, v in body.items() if k != "meta"}
+    # Stored meta is the analysis meta plus the upload record.
+    assert stored["meta"].items() >= body["meta"].items()
+    assert stored["meta"]["upload"]["original_filename"] == VIDEO.name
+    assert (detail["summary"]["rula"]["score"], detail["summary"]["rula"]["risk"]) == (rula, rula_risk)
+    assert (detail["summary"]["reba"]["score"], detail["summary"]["reba"]["risk"]) == (reba, reba_risk)
+    assert detail["report_available"] is False
+
+    history = client.get("/api/v1/assessments").json()
+    assert history["total"] == 1
+    item = history["items"][0]
+    assert item["id"] == assessment_id and item["video_name"] == VIDEO.name
+    assert (item["rula"]["score"], item["reba"]["score"]) == (rula, reba)
+
+    overview = client.get("/api/v1/overview").json()
+    assert overview["total_assessments"] == 1
+    assert (overview["rula"]["highest"], overview["reba"]["highest"]) == (rula, reba)
+    assert (overview["rula"]["average"], overview["reba"]["average"]) == (rula, reba)
+    assert overview["rula"]["distribution"] == {rula_risk: 1}
+    assert overview["reba"]["distribution"] == {reba_risk: 1}
+    assert overview["latest"][0]["id"] == assessment_id
+
+    generated = client.post(f"/api/v1/assessments/{assessment_id}/report")
+    assert generated.status_code == 201
+    content = generated.json()["content"]
+    assert (content["rula"]["score"], content["rula"]["risk"]) == (rula, rula_risk)
+    assert (content["reba"]["score"], content["reba"]["risk"]) == (reba, reba_risk)
+    assert content["rula"]["risk_distribution"] == body["rula"]["risk_distribution"]
+    assert content["reba"]["risk_distribution"] == body["reba"]["risk_distribution"]
+    assert content["overall_risk"] == detail["summary"]["overall_risk"]
+
+    fetched = client.get(f"/api/v1/assessments/{assessment_id}/report")
+    assert fetched.status_code == 200 and fetched.json()["content"] == content
+    pdf = client.get(fetched.json()["download_url"])
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    assert client.get(f"/api/v1/assessments/{assessment_id}").json()["report_available"] is True
+
+
+# ========================================================= schema guard
+
+def test_health_reports_pending_migrations(client, alembic_run):
+    assert client.get("/api/v1/health/db").json()["migrations"] == "current"
+    alembic_run("downgrade", "b7c3e1f9a2d4")
+    try:
+        assert client.get("/api/v1/health/db").json()["migrations"] == "behind"
+    finally:
+        alembic_run("upgrade", "head")

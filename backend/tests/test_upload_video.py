@@ -20,6 +20,7 @@ from app.models.area import Area
 from app.models.task import Task
 from app.models.assessment import Assessment
 from app.models.assessment_score import AssessmentScore
+from conftest import client_for, make_user
 
 settings = get_settings()
 
@@ -30,11 +31,9 @@ def db_session():
     # The test database configured by conftest.py.
     session = SessionLocal()
 
-    org = session.query(Organization).first()
-    if not org:
-        org = Organization(id=uuid.uuid4(), name="Upload Test Org")
-        session.add(org)
-        session.commit()
+    # Uploads go to the signed-in account's own assessments, in its organization.
+    user = make_user(session)
+    org = session.get(Organization, user.organization_id)
 
     site = session.query(Site).filter(Site.organization_id == org.id).first()
     if not site:
@@ -54,6 +53,7 @@ def db_session():
         session.add(task)
         session.commit()
 
+    session.test_user = user
     session.test_hierarchy = {
         "org_id": org.id,
         "site_id": site.id,
@@ -67,7 +67,7 @@ def db_session():
 
 def test_upload_video_nonexistent_assessment(db_session):
     """Verify uploading to a non-existent assessment returns 404."""
-    client = TestClient(app)
+    client = client_for(db_session.test_user)
     fake_id = uuid.uuid4()
     files = {"file": ("test.mp4", b"dummy video content", "video/mp4")}
     response = client.post(f"/api/v1/assessments/{fake_id}/upload-video", files=files)
@@ -85,13 +85,14 @@ def test_upload_empty_video(db_session):
         site_id=hierarchy["site_id"],
         area_id=hierarchy["area_id"],
         task_id=hierarchy["task_id"],
+        assessor_id=db_session.test_user.id,
         status="draft",
         consent_given=False,
     )
     db_session.add(assessment)
     db_session.commit()
 
-    client = TestClient(app)
+    client = client_for(db_session.test_user)
     files = {"file": ("empty.mp4", b"", "video/mp4")}
     response = client.post(f"/api/v1/assessments/{assessment_id}/upload-video", files=files)
     assert response.status_code == 400
@@ -108,13 +109,14 @@ def test_upload_unsupported_media_type(db_session):
         site_id=hierarchy["site_id"],
         area_id=hierarchy["area_id"],
         task_id=hierarchy["task_id"],
+        assessor_id=db_session.test_user.id,
         status="draft",
         consent_given=False,
     )
     db_session.add(assessment)
     db_session.commit()
 
-    client = TestClient(app)
+    client = client_for(db_session.test_user)
     files = {"file": ("script.sh", b"echo hello", "text/x-shellscript")}
     response = client.post(f"/api/v1/assessments/{assessment_id}/upload-video", files=files)
     assert response.status_code == 415
@@ -136,6 +138,7 @@ def test_real_video_multipart_upload_e2e(db_session):
         site_id=hierarchy["site_id"],
         area_id=hierarchy["area_id"],
         task_id=hierarchy["task_id"],
+        assessor_id=db_session.test_user.id,
         status="draft",
         consent_given=False,
     )
@@ -147,7 +150,7 @@ def test_real_video_multipart_upload_e2e(db_session):
     if not sample_video_path.exists():
         pytest.skip("Sample video file not found")
 
-    client = TestClient(app)
+    client = client_for(db_session.test_user)
     with open(sample_video_path, "rb") as video_file:
         files = {"file": ("camera_recording.mp4", video_file, "video/mp4")}
         data = {"stride_hz": "25.0"}
@@ -193,3 +196,25 @@ def test_real_video_multipart_upload_e2e(db_session):
     stored = db_session.get(Assessment, assessment_id).capture_metadata["meta"]["upload"]["stored_path"]
     assert Path(stored).exists()
     assert Path(stored).stat().st_size > 0
+
+
+def test_upload_to_another_accounts_assessment_is_not_found(db_session):
+    """An assessment of another account is reported exactly like a missing one."""
+    hierarchy = db_session.test_hierarchy
+    assessment = Assessment(
+        id=uuid.uuid4(),
+        organization_id=hierarchy["org_id"],
+        site_id=hierarchy["site_id"],
+        area_id=hierarchy["area_id"],
+        task_id=hierarchy["task_id"],
+        assessor_id=db_session.test_user.id,
+        status="draft",
+        consent_given=False,
+    )
+    db_session.add(assessment)
+    db_session.commit()
+    other = client_for(make_user(db_session, "other@example.com", "Other"))
+    files = {"file": ("test.mp4", b"dummy video content", "video/mp4")}
+    response = other.post(f"/api/v1/assessments/{assessment.id}/upload-video", files=files)
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Assessment not found"
