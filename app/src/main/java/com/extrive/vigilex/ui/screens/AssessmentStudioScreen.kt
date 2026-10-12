@@ -1,5 +1,9 @@
 package com.extrive.vigilex.ui.screens
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -14,23 +18,24 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.material3.Text
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
-import androidx.compose.runtime.remember
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import com.extrive.vigilex.data.insight.interpret
-import com.extrive.vigilex.ui.components.KeyFinding
-import com.extrive.vigilex.ui.components.KeySquare
-import com.extrive.vigilex.ui.components.RiskConclusion
-import com.extrive.vigilex.ui.theme.Yellow
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import com.extrive.vigilex.data.insight.interpret
 import com.extrive.vigilex.data.media.SelectedVideo
 import com.extrive.vigilex.data.model.AnalysisResult
 import com.extrive.vigilex.data.settings.ServerSettings
@@ -38,11 +43,14 @@ import com.extrive.vigilex.ui.components.ArrowLink
 import com.extrive.vigilex.ui.components.ButtonRow
 import com.extrive.vigilex.ui.components.CaptureGuidance
 import com.extrive.vigilex.ui.components.ErrorState
+import com.extrive.vigilex.ui.components.KeyFinding
+import com.extrive.vigilex.ui.components.KeySquare
 import com.extrive.vigilex.ui.components.LocalWindowClass
 import com.extrive.vigilex.ui.components.PageContainer
 import com.extrive.vigilex.ui.components.PageHeader
 import com.extrive.vigilex.ui.components.PrimaryButton
 import com.extrive.vigilex.ui.components.ProcessingPanel
+import com.extrive.vigilex.ui.components.RiskConclusion
 import com.extrive.vigilex.ui.components.SecondaryButton
 import com.extrive.vigilex.ui.components.StepIndicator
 import com.extrive.vigilex.ui.components.StudioStep
@@ -60,17 +68,67 @@ import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Motion
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
+import com.extrive.vigilex.ui.theme.Yellow
+import java.io.File
 
 @Composable
 fun AssessmentStudioScreen(
     onOpenDiagnostic: (String) -> Unit,
     onOpenDeveloperOptions: () -> Unit
 ) {
+    val context = LocalContext.current
     val state by AssessmentStudio.state.collectAsState()
+
+    var recordingUri by remember { mutableStateOf<Uri?>(null) }
+    var cameraError by remember { mutableStateOf<String?>(null) }
+
+    val recordLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { success ->
+        if (success) {
+            recordingUri?.let { uri -> AssessmentStudio.onVideoPicked(uri) }
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        if (isGranted) {
+            launchCameraRecording(
+                context = context,
+                onUriReady = { uri ->
+                    recordingUri = uri
+                    recordLauncher.launch(uri)
+                },
+                onError = { err -> cameraError = err }
+            )
+        } else {
+            cameraError = "Camera permission is required to record video directly."
+        }
+    }
+
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) AssessmentStudio.onVideoPicked(uri)
     }
+
     val chooseVideo = { picker.launch(arrayOf("video/*")) }
+
+    val recordVideo = {
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (hasPermission) {
+            launchCameraRecording(
+                context = context,
+                onUriReady = { uri ->
+                    recordingUri = uri
+                    recordLauncher.launch(uri)
+                },
+                onError = { err -> cameraError = err }
+            )
+        } else {
+            cameraError = null
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
 
     PageContainer {
         PageHeader(
@@ -92,7 +150,9 @@ fun AssessmentStudioScreen(
                 when (current) {
                     StudioState.Empty, StudioState.Inspecting -> SelectStep(
                         busy = current == StudioState.Inspecting,
-                        onChoose = chooseVideo
+                        onRecord = recordVideo,
+                        onChoose = chooseVideo,
+                        errorMessage = cameraError
                     )
                     is StudioState.Ready -> PreviewStep(current.video, chooseVideo)
                     is StudioState.Analyzing -> TwoPane(
@@ -110,6 +170,25 @@ fun AssessmentStudioScreen(
                 }
             }
         }
+    }
+}
+
+private fun launchCameraRecording(
+    context: Context,
+    onUriReady: (Uri) -> Unit,
+    onError: (String) -> Unit
+) {
+    try {
+        val recordDir = File(context.cacheDir, "recordings").apply { mkdirs() }
+        val tempFile = File.createTempFile("record_", ".mp4", recordDir)
+        val uri = FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.reports",
+            tempFile
+        )
+        onUriReady(uri)
+    } catch (e: Exception) {
+        onError("Could not start camera: ${e.localizedMessage ?: "FileProvider failed"}")
     }
 }
 
@@ -142,9 +221,21 @@ private fun TwoPane(
 }
 
 @Composable
-private fun SelectStep(busy: Boolean, onChoose: () -> Unit) {
+private fun SelectStep(
+    busy: Boolean,
+    onRecord: () -> Unit,
+    onChoose: () -> Unit,
+    errorMessage: String? = null
+) {
     TwoPane(
-        start = { UploadPanel(onChoose = onChoose, busy = busy) },
+        start = {
+            UploadPanel(
+                onRecord = onRecord,
+                onChoose = onChoose,
+                busy = busy,
+                errorMessage = errorMessage
+            )
+        },
         end = {
             Text("BEFORE YOU FILM", style = VxType.label, color = InkMuted)
             Spacer(Modifier.height(Space.sm))
