@@ -45,6 +45,7 @@ import com.extrive.vigilex.ui.theme.VxType
 import com.extrive.vigilex.ui.theme.Yellow
 
 /** Destinations reachable from the account control, provided once by the nav graph. */
+/** Destinations reachable from the account control, provided once by the nav graph. */
 class AccountActions(
     val openProfile: () -> Unit,
     val openSettings: () -> Unit,
