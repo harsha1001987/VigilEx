@@ -154,7 +154,11 @@ fun AssessmentStudioScreen(
                         onChoose = chooseVideo,
                         errorMessage = cameraError
                     )
-                    is StudioState.Ready -> PreviewStep(current.video, chooseVideo)
+                    is StudioState.Ready -> PreviewStep(
+                        video = current.video,
+                        onRecordAgain = recordVideo,
+                        onChooseAnother = chooseVideo
+                    )
                     is StudioState.Analyzing -> TwoPane(
                         start = { VideoPreview(current.video.uri, current.video.aspect()) },
                         end = { ProcessingPanel(current, onCancel = AssessmentStudio::cancel) }
@@ -245,7 +249,11 @@ private fun SelectStep(
 }
 
 @Composable
-private fun PreviewStep(video: SelectedVideo, onChooseAnother: () -> Unit) {
+private fun PreviewStep(
+    video: SelectedVideo,
+    onRecordAgain: () -> Unit,
+    onChooseAnother: () -> Unit
+) {
     TwoPane(
         start = { VideoPreview(video.uri, video.aspect()) },
         end = {
@@ -263,6 +271,7 @@ private fun PreviewStep(video: SelectedVideo, onChooseAnother: () -> Unit) {
             Spacer(Modifier.height(Space.lg))
             ButtonRow {
                 PrimaryButton(text = "Analyze video", onClick = AssessmentStudio::analyze)
+                SecondaryButton(text = "Record again", onClick = onRecordAgain)
                 SecondaryButton(text = "Choose another", onClick = onChooseAnother)
             }
         }
