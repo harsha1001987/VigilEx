@@ -18,12 +18,9 @@ object NetworkModule {
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BASIC
-        // BASIC logs no headers; redacting keeps a token out of Logcat if the level is ever raised.
         redactHeader(AuthInterceptor.HEADER)
     }
 
-    // The session token goes on every request to the server that issued it.
-    // The logger is added after it so it sees the final request.
     private val okHttpClient = OkHttpClient.Builder()
         .addInterceptor(AuthInterceptor())
         .addInterceptor(loggingInterceptor)
@@ -31,19 +28,42 @@ object NetworkModule {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(ApiConfig.EMULATOR_BASE_URL) // Legacy CRUD APIs; analysis uses the configured server.
-        .client(okHttpClient)
-        .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
-        .build()
+    private val siteApis = mutableMapOf<String, SiteApi>()
+    private val areaApis = mutableMapOf<String, AreaApi>()
+    private val taskApis = mutableMapOf<String, TaskApi>()
 
-    val siteApi: SiteApi = retrofit.create(SiteApi::class.java)
-    val areaApi: AreaApi = retrofit.create(AreaApi::class.java)
-    val taskApi: TaskApi = retrofit.create(TaskApi::class.java)
+    @Synchronized
+    fun siteApi(baseUrl: String): SiteApi = siteApis.getOrPut(baseUrl) {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(SiteApi::class.java)
+    }
+
+    @Synchronized
+    fun areaApi(baseUrl: String): AreaApi = areaApis.getOrPut(baseUrl) {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(AreaApi::class.java)
+    }
+
+    @Synchronized
+    fun taskApi(baseUrl: String): TaskApi = taskApis.getOrPut(baseUrl) {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+            .create(TaskApi::class.java)
+    }
 
     // Video analysis runs YOLO + ByteTrack before responding, which can take
     // minutes for longer clips, so it needs far longer timeouts than CRUD calls.
-    // Retries are disabled so a dropped connection never uploads a video twice.
     private val analysisClient = okHttpClient.newBuilder()
         .writeTimeout(5, TimeUnit.MINUTES)
         .readTimeout(15, TimeUnit.MINUTES)
@@ -52,7 +72,6 @@ object NetworkModule {
 
     private val analysisApis = mutableMapOf<String, AnalysisApi>()
 
-    /** The base URL is user-configurable (Settings), so APIs are built per URL. */
     @Synchronized
     fun analysisApi(baseUrl: String): AnalysisApi = analysisApis.getOrPut(baseUrl) {
         Retrofit.Builder()
@@ -62,8 +81,6 @@ object NetworkModule {
             .create(AnalysisApi::class.java)
     }
 
-    // Saved assessments, overview and reports. Report generation renders a PDF
-    // on the server, so reads get more time than the CRUD default.
     private val assessmentClient = okHttpClient.newBuilder()
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
@@ -71,7 +88,6 @@ object NetworkModule {
     private val assessmentApis = mutableMapOf<String, AssessmentApi>()
     private val authApis = mutableMapOf<String, AuthApi>()
 
-    /** Accounts, on the configured server. */
     @Synchronized
     fun authApi(baseUrl: String): AuthApi = authApis.getOrPut(baseUrl) {
         Retrofit.Builder()
@@ -82,7 +98,6 @@ object NetworkModule {
             .create(AuthApi::class.java)
     }
 
-    /** Same server as analysis (Settings → Developer options), built per URL. */
     @Synchronized
     fun assessmentApi(baseUrl: String): AssessmentApi = assessmentApis.getOrPut(baseUrl) {
         Retrofit.Builder()

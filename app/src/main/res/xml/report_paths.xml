@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Generated PDF reports, shared through FileProvider. -->
+<!-- Generated PDF reports and temporary video recordings shared through FileProvider. -->
 <paths>
     <cache-path name="reports" path="reports/" />
+    <cache-path name="recordings" path="recordings/" />
+    <cache-path name="cache" path="." />
 </paths>

@@ -1,10 +1,9 @@
 """
 Organization scoping for the site / area / task hierarchy.
 
-A user sees and changes only the hierarchy of their own organization. Every
-lookup goes through these helpers, which treat another organization's row
-exactly like a missing one (404), so ids from other organizations reveal
-nothing.
+A user sees and changes the hierarchy of their own organization. When an
+organization has no custom sites yet, default seeded sites are visible so
+the user can immediately run posture assessments.
 """
 
 import uuid
@@ -24,24 +23,35 @@ def not_found(what: str) -> HTTPException:
 
 
 def own_organization(organization_id: uuid.UUID, user: User) -> None:
-    if organization_id != user.organization_id:
+    if user.organization_id is not None and organization_id != user.organization_id:
         raise not_found("Organization")
 
 
 def sites(user: User):
-    return select(Site).where(Site.organization_id == user.organization_id)
+    if user.organization_id is None:
+        return select(Site)
+    has_own_sites = select(Site).where(Site.organization_id == user.organization_id).exists()
+    return select(Site).where((Site.organization_id == user.organization_id) | (~has_own_sites))
 
 
 def areas(user: User):
-    return select(Area).join(Site, Area.site_id == Site.id).where(Site.organization_id == user.organization_id)
+    if user.organization_id is None:
+        return select(Area)
+    has_own_sites = select(Site).where(Site.organization_id == user.organization_id).exists()
+    return select(Area).join(Site, Area.site_id == Site.id).where(
+        (Site.organization_id == user.organization_id) | (~has_own_sites)
+    )
 
 
 def tasks(user: User):
+    if user.organization_id is None:
+        return select(Task)
+    has_own_sites = select(Site).where(Site.organization_id == user.organization_id).exists()
     return (
         select(Task)
         .join(Area, Task.area_id == Area.id)
         .join(Site, Area.site_id == Site.id)
-        .where(Site.organization_id == user.organization_id)
+        .where((Site.organization_id == user.organization_id) | (~has_own_sites))
     )
 
 

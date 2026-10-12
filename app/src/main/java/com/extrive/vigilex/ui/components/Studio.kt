@@ -64,6 +64,7 @@ import com.extrive.vigilex.ui.theme.InkMuted
 import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Motion
 import com.extrive.vigilex.ui.theme.Radius
+import com.extrive.vigilex.ui.theme.Red
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.Surface
 import com.extrive.vigilex.ui.theme.VxType
@@ -112,30 +113,46 @@ fun StepIndicator(current: StudioStep, modifier: Modifier = Modifier) {
 // ------------------------------------------------------------------ upload
 
 @Composable
-fun UploadPanel(onChoose: () -> Unit, busy: Boolean, modifier: Modifier = Modifier) {
+fun UploadPanel(
+    onRecord: () -> Unit,
+    onChoose: () -> Unit,
+    busy: Boolean,
+    errorMessage: String? = null,
+    modifier: Modifier = Modifier
+) {
     Column(
         modifier
             .fillMaxWidth()
             .clip(Radius.small)
             .background(Surface)
             .border(Border.hairline, HairlineStrong, Radius.small)
-            .clickable(enabled = !busy, role = Role.Button, onClick = onChoose)
             .padding(horizontal = Space.lg, vertical = Space.xxl)
     ) {
-        Text("SELECT VIDEO", style = VxType.label, color = InkMuted)
+        Text("RECORD OR SELECT VIDEO", style = VxType.label, color = InkMuted)
         Spacer(Modifier.height(Space.sm))
-        Text("Choose a workplace video", style = VxType.sectionTitle, color = Ink)
+        Text("Capture a workplace video", style = VxType.sectionTitle, color = Ink)
         Spacer(Modifier.height(Space.xs))
         Text(
-            "MP4, MOV, AVI, 3GP, MKV or WEBM from this device.",
+            "Record 10–20 seconds of the task directly, or choose an existing video (MP4, MOV, 3GP) from this device.",
             style = VxType.bodySmall,
             color = InkSecondary
         )
+        if (!errorMessage.isNullOrBlank()) {
+            Spacer(Modifier.height(Space.sm))
+            Text(
+                text = errorMessage,
+                style = VxType.bodySmall,
+                color = Red
+            )
+        }
         Spacer(Modifier.height(Space.lg))
         if (busy) {
             Text("Reading video…", style = VxType.bodySmall, color = InkMuted)
         } else {
-            PrimaryButton(text = "Choose video", onClick = onChoose)
+            Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                PrimaryButton(text = "Record video", onClick = onRecord)
+                SecondaryButton(text = "Choose from device", onClick = onChoose)
+            }
         }
     }
 }
