@@ -39,12 +39,12 @@ import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkMuted
 import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Radius
+import com.extrive.vigilex.ui.theme.Size
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.Surface
 import com.extrive.vigilex.ui.theme.VxType
 import com.extrive.vigilex.ui.theme.Yellow
 
-/** Destinations reachable from the account control, provided once by the nav graph. */
 /** Destinations reachable from the account control, provided once by the nav graph. */
 class AccountActions(
     val openProfile: () -> Unit,
@@ -94,13 +94,13 @@ fun AccountButton(modifier: Modifier = Modifier) {
             onClick = { open = true },
             modifier = Modifier.semantics { contentDescription = "Account menu" }
         ) {
-            Avatar(account, size = 32.dp)
+            Avatar(account, size = Size.avatar)
         }
         DropdownMenu(
             expanded = open,
             onDismissRequest = { open = false },
             containerColor = Surface,
-            shape = Radius.small,
+            shape = Radius.medium,
             tonalElevation = 0.dp,
             modifier = Modifier.widthIn(min = 220.dp)
         ) {

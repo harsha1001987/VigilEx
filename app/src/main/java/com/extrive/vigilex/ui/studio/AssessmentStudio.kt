@@ -31,7 +31,12 @@ data class StudioFailure(
     val canRetry: Boolean,
     val suggestSettings: Boolean = false,
     /** Failure class and request URL, shown only with Developer options on. */
-    val developerDetail: String? = null
+    val developerDetail: String? = null,
+    /**
+     * The upload finished, so the server may still save this analysis. Trying
+     * again could then assess the same video twice; History shows whether it did.
+     */
+    val mayHaveSaved: Boolean = false
 )
 
 sealed interface UploadPhase {
@@ -43,7 +48,8 @@ sealed interface UploadPhase {
 sealed interface StudioState {
     data object Empty : StudioState
     data object Inspecting : StudioState
-    data class Ready(val video: SelectedVideo) : StudioState
+    /** [rejected] explains why a replacement video was not accepted; [video] is still the selection. */
+    data class Ready(val video: SelectedVideo, val rejected: String? = null) : StudioState
     data class Analyzing(
         val video: SelectedVideo,
         val phase: UploadPhase,
@@ -77,6 +83,13 @@ object AssessmentStudio {
     }
 
     fun onVideoPicked(uri: Uri) {
+        // A replacement that turns out to be unusable must not cost the video already chosen.
+        val previous = when (val current = _state.value) {
+            is StudioState.Ready -> current.video
+            is StudioState.Failed -> current.video
+            is StudioState.Inconclusive -> current.video
+            else -> null
+        }
         job?.cancel()
         try {
             // Keeps the video readable later for the diagnostic evidence view.
@@ -88,14 +101,18 @@ object AssessmentStudio {
         job = scope.launch {
             _state.value = when (val inspection = VideoInspector.inspect(appContext, uri)) {
                 is InspectionResult.Valid -> StudioState.Ready(inspection.video)
-                is InspectionResult.Invalid -> StudioState.Failed(
-                    video = null,
-                    failure = StudioFailure(
-                        title = "Invalid video",
-                        message = inspection.message,
-                        canRetry = false
+                is InspectionResult.Invalid -> if (previous != null) {
+                    StudioState.Ready(previous, rejected = inspection.message)
+                } else {
+                    StudioState.Failed(
+                        video = null,
+                        failure = StudioFailure(
+                            title = "Invalid video",
+                            message = inspection.message,
+                            canRetry = false
+                        )
                     )
-                )
+                }
             }
         }
     }
@@ -150,10 +167,22 @@ object AssessmentStudio {
         }
     }
 
+    /**
+     * Stops an upload. Only offered while uploading: the server creates the
+     * assessment once it has the whole video, so stopping after that would not
+     * stop the analysis, and trying again would assess the video twice.
+     */
     fun cancel() {
         val current = _state.value
+        if (current !is StudioState.Analyzing || current.phase !is UploadPhase.Uploading) return
         job?.cancel()
-        if (current is StudioState.Analyzing) _state.value = StudioState.Ready(current.video)
+        _state.value = StudioState.Ready(current.video)
+    }
+
+    /** The result screen for [assessmentId] was opened; the studio starts over. */
+    fun resultOpened(assessmentId: String) {
+        val current = _state.value
+        if (current is StudioState.Completed && current.recordId == assessmentId) _state.value = StudioState.Empty
     }
 
     fun reset() {
@@ -211,7 +240,8 @@ object AssessmentStudio {
                 message = "The video was uploaded, but no result arrived in time. Longer videos take more time; " +
                     "try again or use a shorter clip.",
                 canRetry = true,
-                developerDetail = technical
+                developerDetail = technical,
+                mayHaveSaved = true
             )
             FailureReason.INVALID_VIDEO -> StudioFailure(
                 title = "Video not accepted",
@@ -229,7 +259,8 @@ object AssessmentStudio {
                 title = "Analysis failed",
                 message = "VigilEx could not read the analysis result. Try again.",
                 canRetry = true,
-                developerDetail = technical
+                developerDetail = technical,
+                mayHaveSaved = true
             )
             FailureReason.SIGNED_OUT -> StudioFailure(
                 title = "Signed out",

@@ -16,10 +16,26 @@ object Space {
     val huge = 96.dp
 }
 
+/** Fixed component dimensions, so controls stay the same size on every screen. */
+object Size {
+    /** Minimum touch target for anything tappable. */
+    val touchTarget = 48.dp
+    val button = 52.dp
+    val headerBar = 56.dp
+    val bottomBar = 64.dp
+    val avatar = 36.dp
+    val icon = 24.dp
+    val iconSmall = 18.dp
+}
+
 object Radius {
     val sharp = RoundedCornerShape(2.dp)
+    /** Tags and small markers. */
     val small = RoundedCornerShape(6.dp)
+    /** Buttons, fields and menus. */
     val medium = RoundedCornerShape(12.dp)
+    /** Cards and panels. */
+    val card = RoundedCornerShape(14.dp)
     val large = RoundedCornerShape(20.dp)
     val pill = RoundedCornerShape(50)
 }

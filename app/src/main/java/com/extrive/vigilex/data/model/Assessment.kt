@@ -260,3 +260,7 @@ data class ReportMetadataDto(
     @SerialName("download_url") val downloadUrl: String,
     val content: ReportContentDto
 )
+
+/** Completed assessments whose overall risk (backend `overall_risk`) is high or very high. */
+fun OverviewDto.needsAttention(): Int =
+    (overallRiskDistribution["high"] ?: 0) + (overallRiskDistribution["very_high"] ?: 0)

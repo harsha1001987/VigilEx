@@ -119,7 +119,7 @@ private fun EvidenceItem(
         Spacer(Modifier.height(Space.xs))
         FrameCaption(item.keyframe, item.index, keyframeCount)
         Text(
-            item.reason.describe().uppercase(),
+            item.reason.describe(),
             style = if (small) VxType.label else VxType.labelLarge,
             color = Ink
         )
@@ -129,7 +129,7 @@ private fun EvidenceItem(
 @Composable
 private fun FrameCaption(keyframe: Keyframe, index: Int, count: Int) {
     Text(
-        "FRAME ${"%02d".format(index + 1)} / ${"%02d".format(count)} · ${formatSeconds(keyframe.t)}",
+        "Frame ${index + 1} of $count · ${formatSeconds(keyframe.t)}",
         style = VxType.label,
         color = InkMuted
     )

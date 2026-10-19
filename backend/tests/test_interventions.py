@@ -321,11 +321,11 @@ def test_pdf_contains_the_intervention_text_in_action_order(client, db, real_res
     text = _pdf_text(client.get(f"/api/v1/assessments/{record.id}/report/pdf").content)
 
     primary = content["interventions"][0]
-    assert primary["title"].upper() in text
+    assert primary["title"] in text
     for item in content["interventions"][1:]:
-        assert item["title"].upper() in text
-    headings = ["OVERALL ASSESSMENT", "PRIORITY ACTION", "OTHER ACTIONS", "MEASUREMENTS",
-                "POSTURE EVIDENCE", "CAMERA VIEW AND RELIABILITY", "TECHNICAL DETAILS AND ASSESSMENT LIMITATIONS"]
+        assert item["title"] in text
+    headings = ["Overall assessment", "Priority action", "Other actions", "Measurements",
+                "Posture evidence", "Camera view and reliability", "Technical details and assessment limitations"]
     positions = [text.index(h) for h in headings]
     assert positions == sorted(positions)
     assert "does not assess injury, pain, fatigue or health" in text

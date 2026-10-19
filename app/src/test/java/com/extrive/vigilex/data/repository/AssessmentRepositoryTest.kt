@@ -7,6 +7,8 @@ import com.extrive.vigilex.data.api.ErrorKind
 import com.extrive.vigilex.data.insight.interpret
 import com.extrive.vigilex.data.model.AnalysisJson
 import com.extrive.vigilex.data.model.AssessmentPageDto
+import com.extrive.vigilex.data.model.OverviewDto
+import com.extrive.vigilex.data.model.needsAttention
 import com.extrive.vigilex.data.model.ReportMetadataDto
 import com.sun.net.httpserver.HttpServer
 import java.io.ByteArrayInputStream
@@ -225,6 +227,19 @@ class AssessmentRepositoryTest {
         assertEquals(mapOf("moderate" to 1), overview.rula.distribution)
         assertEquals(mapOf("medium" to 1), overview.reba.distribution)
         assertEquals(id, overview.latest.single().id)
+        // A moderate overall risk does not count as needing attention.
+        assertEquals(0, overview.needsAttention())
+    }
+
+    @Test
+    fun `needs attention counts high and very high overall risk only`() {
+        val overview = AnalysisJson.decodeFromString(
+            OverviewDto.serializer(),
+            """{"total_assessments":6,"recent_window_days":30,"recent_assessments":2,
+            "overall_risk_distribution":{"low":1,"moderate":2,"high":2,"very_high":1},
+            "rula":{"assessments_scored":6,"scale_max":7},"reba":{"assessments_scored":6,"scale_max":15}}"""
+        )
+        assertEquals(3, overview.needsAttention())
     }
 
     @Test

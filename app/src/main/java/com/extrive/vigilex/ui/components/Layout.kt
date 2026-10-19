@@ -31,17 +31,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import com.extrive.vigilex.ui.theme.Hairline
 import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkMuted
-import com.extrive.vigilex.ui.theme.InkSecondary
+import com.extrive.vigilex.ui.theme.Size
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
+import com.extrive.vigilex.ui.theme.Yellow
 
 val ContentMaxWidth = 1120.dp
 
 fun WindowClass.gutter(): Dp = when (this) {
-    WindowClass.COMPACT -> 20.dp
+    WindowClass.COMPACT -> 16.dp
     WindowClass.MEDIUM -> 40.dp
     WindowClass.EXPANDED -> 56.dp
 }
@@ -71,14 +78,30 @@ fun PageContainer(
     }
 }
 
+/** Yellow brand square and "VigilEx": the compact identity used in headers and on sign-in. */
+@Composable
+fun Wordmark(modifier: Modifier = Modifier, color: Color = Ink) {
+    Row(
+        modifier.semantics(mergeDescendants = true) { contentDescription = "VigilEx" },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(12.dp)
+                .background(Yellow, RoundedCornerShape(2.dp))
+        )
+        Spacer(Modifier.width(Space.xs))
+        Text("VigilEx", style = VxType.wordmark, color = color)
+    }
+}
+
 /**
- * The application header: identity, page context and the account control.
- * On phones the wordmark sits in the top row (there is no sidebar); sub-pages
- * get a back action instead of the account control.
+ * The application header: identity, the account control, then the page title
+ * and one line of context. On phones the wordmark sits in the top row (there
+ * is no sidebar); sub-pages get a back action instead of the account control.
  */
 @Composable
 fun PageHeader(
-    eyebrow: String,
     title: String,
     supporting: String? = null,
     onBack: (() -> Unit)? = null,
@@ -89,7 +112,7 @@ fun PageHeader(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp),
+                .height(Size.headerBar),
             verticalAlignment = Alignment.CenterVertically
         ) {
             when {
@@ -97,77 +120,83 @@ fun PageHeader(
                 onBack != null -> IconButton(onClick = onBack, modifier = Modifier.offset(x = (-12).dp)) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = Ink)
                 }
-                compact -> Text("VIGILEX", style = VxType.wordmark, color = Ink)
+                compact -> Wordmark()
             }
             Spacer(Modifier.weight(1f))
             trailing?.invoke(this)
             // Offset so the avatar, not its touch target, aligns with the gutter.
-            if (onBack == null) AccountButton(Modifier.offset(x = 8.dp))
+            if (onBack == null) AccountButton(Modifier.offset(x = 6.dp))
         }
-        Spacer(Modifier.height(if (compact) Space.lg else Space.xxl))
-        Text(eyebrow.uppercase(), style = VxType.label, color = InkMuted)
-        Spacer(Modifier.height(Space.sm))
+        Spacer(Modifier.height(if (compact) Space.md else Space.xl))
         Text(
             text = title,
             style = if (compact) VxType.pageTitleCompact else VxType.pageTitle,
-            color = Ink
+            color = Ink,
+            modifier = Modifier.semantics { heading() }
         )
         if (supporting != null) {
-            Spacer(Modifier.height(Space.sm))
+            Spacer(Modifier.height(Space.xxs))
             Text(
                 text = supporting,
                 style = VxType.body,
-                color = InkSecondary,
+                color = InkMuted,
                 modifier = Modifier.widthIn(max = 560.dp)
             )
         }
-        Spacer(Modifier.height(if (compact) Space.xl else Space.xxl))
+        Spacer(Modifier.height(Space.lg))
     }
 }
 
 /**
  * Slim header for assessment views, where the first viewport belongs to the
- * result: back, a small context label and one line of metadata.
+ * result: back, the view's name and one line of metadata.
  */
 @Composable
 fun SubPageHeader(context: String, meta: String?, onBack: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.height(Size.headerBar), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.offset(x = (-12).dp)) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = Ink)
             }
-            Text(context.uppercase(), style = VxType.label, color = Ink)
+            Text(
+                context,
+                style = VxType.title,
+                color = Ink,
+                modifier = Modifier
+                    .offset(x = (-4).dp)
+                    .semantics { heading() }
+            )
         }
         if (meta != null) {
-            Text(meta, style = VxType.bodySmall, color = InkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(meta, style = VxType.bodySmall, color = InkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
-        Spacer(Modifier.height(Space.xl))
+        Spacer(Modifier.height(Space.lg))
     }
 }
 
-/** Swiss section opener: a strong rule, then a small tracked label. */
+/** Section heading, e.g. "Recent assessments", with an optional trailing link. */
 @Composable
 fun SectionLabel(
     text: String,
     modifier: Modifier = Modifier,
     trailing: (@Composable RowScope.() -> Unit)? = null
 ) {
-    Column(modifier.fillMaxWidth()) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(1.dp)
-                .background(Ink)
-        )
-        Row(
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = Size.touchTarget)
+            .padding(bottom = Space.xxs),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text,
+            style = VxType.sectionTitle,
+            color = Ink,
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = Space.sm, bottom = Space.lg),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text.uppercase(), style = VxType.label, color = Ink, modifier = Modifier.weight(1f))
-            trailing?.invoke(this)
-        }
+                .weight(1f)
+                .semantics { heading() }
+        )
+        trailing?.invoke(this)
     }
 }
 
@@ -190,13 +219,13 @@ fun VerticalHairline(modifier: Modifier = Modifier, color: Color = Hairline) {
     )
 }
 
-/** Small square used as a colour key next to a label. */
+/** Small dot used as a colour key next to a label (same mark as in tags). */
 @Composable
 fun KeySquare(color: Color, modifier: Modifier = Modifier, size: Dp = 8.dp) {
     Box(
         modifier
             .size(size)
-            .background(color)
+            .background(color, CircleShape)
     )
 }
 

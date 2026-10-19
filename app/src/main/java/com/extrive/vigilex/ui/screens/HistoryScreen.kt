@@ -1,6 +1,7 @@
 package com.extrive.vigilex.ui.screens
 
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,6 +20,8 @@ import com.extrive.vigilex.data.repository.HistoryPage
 import com.extrive.vigilex.data.store.AssessmentStore
 import com.extrive.vigilex.ui.components.AssessmentList
 import com.extrive.vigilex.ui.components.BackendErrorState
+import com.extrive.vigilex.ui.components.Callout
+import com.extrive.vigilex.ui.components.CalloutTone
 import com.extrive.vigilex.ui.components.EmptyState
 import com.extrive.vigilex.ui.components.LoadingState
 import com.extrive.vigilex.ui.components.PageContainer
@@ -26,7 +29,6 @@ import com.extrive.vigilex.ui.components.PageHeader
 import com.extrive.vigilex.ui.components.SecondaryButton
 import com.extrive.vigilex.ui.state.UiState
 import com.extrive.vigilex.ui.theme.InkMuted
-import com.extrive.vigilex.ui.theme.Red
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
 import kotlinx.coroutines.launch
@@ -69,40 +71,40 @@ fun HistoryScreen(
 
     PageContainer {
         PageHeader(
-            eyebrow = "History",
-            title = "Assessment history",
-            supporting = "Completed video assessments saved on the VigilEx server."
+            title = "History",
+            supporting = "Completed assessments saved to your account, newest first."
         )
         when (val current = state) {
-            UiState.Loading -> LoadingState()
+            UiState.Loading -> LoadingState(label = "Loading history…")
             is UiState.Error -> error?.let { BackendErrorState(it, onRetry = { attempt++ }) }
             is UiState.Success -> {
                 val page = current.data
                 if (page.records.isEmpty()) {
                     EmptyState(
                         title = "No assessments yet",
-                        body = "Completed assessments will appear here.",
+                        body = "Completed assessments will appear here, newest first.",
                         actionLabel = "Start assessment",
                         onAction = onStartAssessment
                     )
                 } else {
                     Text(
                         if (page.total == 1) "1 assessment" else "${page.total} assessments",
-                        style = VxType.mono,
+                        style = VxType.bodySmall,
                         color = InkMuted
                     )
-                    Spacer(Modifier.height(Space.md))
+                    Spacer(Modifier.height(Space.sm))
                     AssessmentList(page.records, onOpen = { onOpenAssessment(it.id) })
                     if (page.hasMore) {
                         Spacer(Modifier.height(Space.lg))
                         SecondaryButton(
-                            text = if (loadingMore) "Loading…" else "Load more",
+                            text = "Load more",
                             onClick = { loadMore(page) },
-                            enabled = !loadingMore
+                            loading = loadingMore,
+                            modifier = Modifier.fillMaxWidth()
                         )
                         moreError?.let {
                             Spacer(Modifier.height(Space.xs))
-                            Text(it, style = VxType.bodySmall, color = Red)
+                            Callout(title = "More assessments could not be loaded", body = it, tone = CalloutTone.ERROR)
                         }
                     }
                 }

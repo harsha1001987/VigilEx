@@ -50,8 +50,14 @@ import com.extrive.vigilex.data.account.signInPasswordError
 import com.extrive.vigilex.data.api.ApiResult
 import com.extrive.vigilex.data.api.ErrorKind
 import com.extrive.vigilex.data.settings.ServerSettings
-import com.extrive.vigilex.ui.components.EmptyState
-import com.extrive.vigilex.ui.components.ErrorState
+import com.extrive.vigilex.ui.components.Callout
+import com.extrive.vigilex.ui.components.CalloutTone
+import com.extrive.vigilex.ui.components.SecondaryButton
+import com.extrive.vigilex.ui.components.Wordmark
+import com.extrive.vigilex.ui.theme.Size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.text.style.TextDecoration
 import com.extrive.vigilex.ui.components.LocalWindowClass
 import com.extrive.vigilex.ui.components.PrimaryButton
 import com.extrive.vigilex.ui.components.VxTextField
@@ -111,10 +117,10 @@ fun SignInScreen(
         }
     }
 
-    AuthScaffold(title = "Sign in", onClose = null) {
+    AuthScaffold(title = "Sign in", onClose = null, supporting = "Use the account your assessments are saved to.") {
         sessionNotice((session as? SessionState.SignedOut)?.reason)?.let {
-            Text(it, style = VxType.body, color = InkSecondary, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            Spacer(Modifier.height(Space.xl))
+            Callout(title = null, body = it, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            Spacer(Modifier.height(Space.lg))
         }
         VxTextField(
             label = "Email",
@@ -124,7 +130,7 @@ fun SignInScreen(
             keyboardType = KeyboardType.Email,
             onImeAction = { focus.moveFocus(FocusDirection.Down) }
         )
-        Spacer(Modifier.height(Space.lg))
+        Spacer(Modifier.height(Space.md))
         VxTextField(
             label = "Password",
             value = password,
@@ -134,23 +140,23 @@ fun SignInScreen(
             imeAction = ImeAction.Done,
             onImeAction = ::submit
         )
-        Spacer(Modifier.height(Space.xs))
         TextLink("Forgot password?", onForgotPassword, Modifier.offset(x = (-12).dp))
-        Spacer(Modifier.height(Space.lg))
+        Spacer(Modifier.height(Space.sm))
         PrimaryButton(
-            text = if (busy) "Signing in…" else "Sign in",
+            text = "Sign in",
             onClick = ::submit,
-            enabled = !busy,
+            loading = busy,
             modifier = Modifier.fillMaxWidth()
         )
         failure?.let { AuthFailure(it, onOpenServerSettings.takeIf { developer }) }
 
-        Spacer(Modifier.height(Space.xl))
+        Spacer(Modifier.height(Space.lg))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("New to VigilEx?", style = VxType.bodySmall, color = InkSecondary)
             TextLink("Create account", onCreateAccount)
         }
-        ServerLine(server, onOpenServerSettings.takeIf { developer })
+        // The server is a developer concern; ordinary users never see or change it here.
+        if (developer) ServerLine(server, onOpenServerSettings)
     }
 }
 
@@ -196,7 +202,7 @@ fun CreateAccountScreen(
     val next = { focus.moveFocus(FocusDirection.Down) }
     val edited = { failure = null }
 
-    AuthScaffold(title = "Create account", onClose = onClose) {
+    AuthScaffold(title = "Create account", onClose = onClose, supporting = "Assessments and reports are saved to this account.") {
         VxTextField(
             label = "Name",
             value = name,
@@ -204,7 +210,7 @@ fun CreateAccountScreen(
             error = nameError(name).takeIf { submitted },
             onImeAction = { next() }
         )
-        Spacer(Modifier.height(Space.lg))
+        Spacer(Modifier.height(Space.md))
         VxTextField(
             label = "Email",
             value = email,
@@ -213,20 +219,17 @@ fun CreateAccountScreen(
             keyboardType = KeyboardType.Email,
             onImeAction = { next() }
         )
-        Spacer(Modifier.height(Space.lg))
+        Spacer(Modifier.height(Space.md))
         VxTextField(
             label = "Password",
             value = password,
             onValueChange = { password = it; edited() },
             error = newPasswordError(password).takeIf { submitted },
+            supporting = "At least $MIN_PASSWORD_LENGTH characters.",
             password = true,
             onImeAction = { next() }
         )
-        if (!submitted || newPasswordError(password) == null) {
-            Spacer(Modifier.height(Space.xs))
-            Text("At least $MIN_PASSWORD_LENGTH characters.", style = VxType.bodySmall, color = InkMuted)
-        }
-        Spacer(Modifier.height(Space.lg))
+        Spacer(Modifier.height(Space.md))
         VxTextField(
             label = "Confirm password",
             value = confirmation,
@@ -236,16 +239,16 @@ fun CreateAccountScreen(
             imeAction = ImeAction.Done,
             onImeAction = ::submit
         )
-        Spacer(Modifier.height(Space.xl))
+        Spacer(Modifier.height(Space.lg))
         PrimaryButton(
-            text = if (busy) "Creating account…" else "Create account",
+            text = "Create account",
             onClick = ::submit,
-            enabled = !busy,
+            loading = busy,
             modifier = Modifier.fillMaxWidth()
         )
         failure?.let { AuthFailure(it, null) }
 
-        Spacer(Modifier.height(Space.xl))
+        Spacer(Modifier.height(Space.lg))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Already have an account?", style = VxType.bodySmall, color = InkSecondary)
             TextLink("Sign in", onSignIn)
@@ -260,7 +263,7 @@ fun CreateAccountScreen(
 @Composable
 fun ForgotPasswordScreen(onBackToSignIn: () -> Unit) {
     AuthScaffold(title = "Forgot password", onClose = onBackToSignIn) {
-        EmptyState(
+        Callout(
             title = "Password reset is not available yet",
             body = "VigilEx cannot send reset emails yet. Ask your VigilEx administrator to reset your password, " +
                 "then sign in with the new one."
@@ -277,34 +280,36 @@ internal fun sessionNotice(reason: SignOutReason?): String? = when (reason) {
     SignOutReason.USER, null -> null
 }
 
-/** A failed sign-in or registration, in words that say what to do next. */
+/** A failed sign-in or registration, inline under the form, in words that say what to do next. */
 @Composable
 private fun AuthFailure(error: ApiResult.Error, onOpenServerSettings: (() -> Unit)?) {
-    Spacer(Modifier.height(Space.xl))
+    Spacer(Modifier.height(Space.md))
     val unreachable = error.kind == ErrorKind.UNREACHABLE || error.kind == ErrorKind.TIMEOUT
-    ErrorState(
+    Callout(
         title = when (error.kind) {
             ErrorKind.UNAUTHORIZED -> "Not signed in"
             ErrorKind.CONFLICT -> "Email already registered"
             ErrorKind.REJECTED -> "Check your details"
             else -> error.title()
         },
-        message = when (error.kind) {
+        body = when (error.kind) {
             ErrorKind.CONFLICT -> "${error.message} Sign in instead, or use another email."
             else -> error.message
         },
+        tone = CalloutTone.ERROR,
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive },
         actions = if (unreachable && onOpenServerSettings != null) {
-            { PrimaryButton("Server settings", onClick = onOpenServerSettings) }
+            { SecondaryButton("Server settings", onClick = onOpenServerSettings) }
         } else null
     )
 }
 
-/** Which server the account is on; developers can change it before signing in. */
+/** Developer options only: which server the account is on, and a way to change it before signing in. */
 @Composable
-private fun ServerLine(server: String, onOpenServerSettings: (() -> Unit)?) {
-    Spacer(Modifier.height(Space.lg))
+private fun ServerLine(server: String, onOpenServerSettings: () -> Unit) {
+    Spacer(Modifier.height(Space.md))
     Text("Server: $server", style = VxType.mono, color = InkMuted)
-    if (onOpenServerSettings != null) TextLink("Change server", onOpenServerSettings, Modifier.offset(x = (-12).dp))
+    TextLink("Change server", onOpenServerSettings, Modifier.offset(x = (-12).dp))
 }
 
 /** Single centred column, wordmark above the title, no navigation chrome. No back action when [onClose] is null. */
@@ -322,7 +327,7 @@ private fun AuthScaffold(
             .verticalScroll(rememberScrollState())
             .padding(horizontal = LocalWindowClass.current.gutter())
     ) {
-        Row(Modifier.height(56.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.height(Size.headerBar), verticalAlignment = Alignment.CenterVertically) {
             if (onClose != null) {
                 IconButton(onClick = onClose, modifier = Modifier.offset(x = (-12).dp)) {
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back", tint = Ink)
@@ -334,16 +339,16 @@ private fun AuthScaffold(
                 .align(Alignment.CenterHorizontally)
                 .widthIn(max = 400.dp)
                 .fillMaxWidth()
-                .padding(top = Space.xxl, bottom = Space.xxxl)
+                .padding(top = Space.lg, bottom = Space.xxxl)
         ) {
-            Text("VIGILEX", style = VxType.wordmark, color = Ink)
+            Wordmark()
             Spacer(Modifier.height(Space.xl))
-            Text(title, style = VxType.pageTitleCompact, color = Ink)
+            Text(title, style = VxType.pageTitleCompact, color = Ink, modifier = Modifier.semantics { heading() })
             if (supporting != null) {
-                Spacer(Modifier.height(Space.sm))
-                Text(supporting, style = VxType.body, color = InkSecondary)
+                Spacer(Modifier.height(Space.xxs))
+                Text(supporting, style = VxType.body, color = InkMuted)
             }
-            Spacer(Modifier.height(Space.xxl))
+            Spacer(Modifier.height(Space.xl))
             content()
         }
     }
@@ -351,7 +356,7 @@ private fun AuthScaffold(
 
 @Composable
 private fun TextLink(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    TextButton(onClick = onClick, modifier = modifier) {
-        Text(text, style = VxType.bodySmall.copy(fontWeight = VxType.title.fontWeight), color = Ink)
+    TextButton(onClick = onClick, modifier = modifier.heightIn(min = Size.touchTarget)) {
+        Text(text, style = VxType.link.copy(textDecoration = TextDecoration.Underline), color = Ink)
     }
 }

@@ -1,9 +1,13 @@
 package com.extrive.vigilex.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -18,127 +22,163 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import com.extrive.vigilex.data.insight.interpret
 import com.extrive.vigilex.data.media.SelectedVideo
 import com.extrive.vigilex.data.model.AnalysisResult
 import com.extrive.vigilex.data.settings.ServerSettings
 import com.extrive.vigilex.ui.components.ArrowLink
-import com.extrive.vigilex.ui.components.ButtonRow
+import com.extrive.vigilex.ui.components.Callout
+import com.extrive.vigilex.ui.components.CalloutTone
 import com.extrive.vigilex.ui.components.CaptureGuidance
 import com.extrive.vigilex.ui.components.ErrorState
-import com.extrive.vigilex.ui.components.KeyFinding
-import com.extrive.vigilex.ui.components.KeySquare
+import com.extrive.vigilex.ui.components.LoadingState
+import com.extrive.vigilex.ui.components.RecordingTips
+import com.extrive.vigilex.ui.components.SelectedVideoSummary
 import com.extrive.vigilex.ui.components.LocalWindowClass
 import com.extrive.vigilex.ui.components.PageContainer
 import com.extrive.vigilex.ui.components.PageHeader
 import com.extrive.vigilex.ui.components.PrimaryButton
 import com.extrive.vigilex.ui.components.ProcessingPanel
-import com.extrive.vigilex.ui.components.RiskConclusion
 import com.extrive.vigilex.ui.components.SecondaryButton
+import com.extrive.vigilex.ui.components.SectionLabel
 import com.extrive.vigilex.ui.components.StepIndicator
 import com.extrive.vigilex.ui.components.StudioStep
 import com.extrive.vigilex.ui.components.UploadPanel
-import com.extrive.vigilex.ui.components.VideoFacts
 import com.extrive.vigilex.ui.components.VideoPreview
 import com.extrive.vigilex.ui.components.WindowClass
 import com.extrive.vigilex.ui.components.aspect
 import com.extrive.vigilex.ui.format.formatPercent
 import com.extrive.vigilex.ui.studio.AssessmentStudio
 import com.extrive.vigilex.ui.studio.StudioState
-import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkMuted
 import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Motion
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
-import com.extrive.vigilex.ui.theme.Yellow
 import java.io.File
 
+/** Why recording could not start, and whether Android will still show the permission prompt. */
+private data class CameraProblem(val message: String, val needsSettings: Boolean)
+
+/**
+ * New assessment: choose a video → review it → analyze → the result.
+ * A successful analysis opens the saved assessment directly; the studio then
+ * starts over, so Back from the result returns to a fresh New assessment.
+ */
 @Composable
 fun AssessmentStudioScreen(
-    onOpenDiagnostic: (String) -> Unit,
+    onOpenResult: (String) -> Unit,
+    onOpenHistory: () -> Unit,
     onOpenDeveloperOptions: () -> Unit
 ) {
     val context = LocalContext.current
     val state by AssessmentStudio.state.collectAsState()
 
+    // Open the result once. The studio is reset only after this screen has left the
+    // composition, so it never flashes back to the start while navigating away.
+    (state as? StudioState.Completed)?.let { done ->
+        LaunchedEffect(done.recordId) { onOpenResult(done.recordId) }
+        DisposableEffect(done.recordId) { onDispose { AssessmentStudio.resultOpened(done.recordId) } }
+    }
+
     var recordingUri by remember { mutableStateOf<Uri?>(null) }
-    var cameraError by remember { mutableStateOf<String?>(null) }
+    var cameraProblem by remember { mutableStateOf<CameraProblem?>(null) }
+    // Set once Android stops showing the permission prompt ("Don't allow" twice, or "Don't ask again").
+    var cameraBlocked by rememberSaveable { mutableStateOf(false) }
 
+    // Cancelling the camera (success = false) leaves the current video, if any, untouched.
     val recordLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { success ->
-        if (success) {
-            recordingUri?.let { uri -> AssessmentStudio.onVideoPicked(uri) }
-        }
+        if (success) recordingUri?.let { uri -> AssessmentStudio.onVideoPicked(uri) }
     }
 
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-        if (isGranted) {
-            launchCameraRecording(
-                context = context,
-                onUriReady = { uri ->
-                    recordingUri = uri
-                    recordLauncher.launch(uri)
-                },
-                onError = { err -> cameraError = err }
-            )
+    val startCamera = {
+        cameraProblem = null
+        launchCameraRecording(
+            context = context,
+            onUriReady = { uri ->
+                recordingUri = uri
+                recordLauncher.launch(uri)
+            },
+            onError = { err -> cameraProblem = CameraProblem(err, needsSettings = false) }
+        )
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            cameraBlocked = false
+            startCamera()
         } else {
-            cameraError = "Camera permission is required to record video directly."
+            val activity = context.findActivity()
+            cameraBlocked = activity != null &&
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.CAMERA)
+            cameraProblem = blockedOrDenied(cameraBlocked)
         }
     }
 
+    // Cancelling the picker (uri = null) leaves the current video, if any, untouched.
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) AssessmentStudio.onVideoPicked(uri)
+        if (uri != null) {
+            cameraProblem = null
+            AssessmentStudio.onVideoPicked(uri)
+        }
     }
 
     val chooseVideo = { picker.launch(arrayOf("video/*")) }
 
     val recordVideo = {
-        val hasPermission = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (hasPermission) {
-            launchCameraRecording(
-                context = context,
-                onUriReady = { uri ->
-                    recordingUri = uri
-                    recordLauncher.launch(uri)
-                },
-                onError = { err -> cameraError = err }
-            )
-        } else {
-            cameraError = null
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        when {
+            granted -> startCamera()
+            // The prompt would not appear; point to app settings instead of asking again.
+            cameraBlocked -> cameraProblem = blockedOrDenied(blocked = true)
+            else -> {
+                cameraProblem = null
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            }
         }
+    }
+    val openAppSettings = {
+        context.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     PageContainer {
         PageHeader(
-            eyebrow = "Assessment studio",
-            title = "Video ergonomic analysis",
-            supporting = "Computer vision posture assessment using RULA and REBA."
-                .takeUnless { state is StudioState.Completed }
+            title = "New assessment",
+            supporting = "Record or choose a short video of a task. VigilEx measures the worker's posture and scores it with RULA and REBA."
+                .takeIf { state == StudioState.Empty || state == StudioState.Inspecting }
         )
         StepIndicator(stepFor(state))
-        Spacer(Modifier.height(Space.xxl))
+        Spacer(Modifier.height(Space.lg))
+
+        cameraProblem?.takeIf { state is StudioState.Empty || state is StudioState.Ready || state is StudioState.Failed }?.let { problem ->
+            Callout(
+                title = if (problem.needsSettings) "Camera access is off" else "Camera unavailable",
+                body = problem.message,
+                tone = CalloutTone.ATTENTION,
+                actions = if (problem.needsSettings) ({ SecondaryButton("Open app settings", onClick = openAppSettings) }) else null
+            )
+            Spacer(Modifier.height(Space.md))
+        }
 
         AnimatedContent(
             targetState = state,
@@ -151,30 +191,52 @@ fun AssessmentStudioScreen(
                     StudioState.Empty, StudioState.Inspecting -> SelectStep(
                         busy = current == StudioState.Inspecting,
                         onRecord = recordVideo,
-                        onChoose = chooseVideo,
-                        errorMessage = cameraError
+                        onChoose = chooseVideo
                     )
                     is StudioState.Ready -> PreviewStep(
                         video = current.video,
+                        rejected = current.rejected,
                         onRecordAgain = recordVideo,
-                        onChooseAnother = chooseVideo
+                        onReplace = chooseVideo
                     )
                     is StudioState.Analyzing -> TwoPane(
-                        start = { VideoPreview(current.video.uri, current.video.aspect()) },
-                        end = { ProcessingPanel(current, onCancel = AssessmentStudio::cancel) }
+                        // Status first, so it stays in view; the video is secondary and small.
+                        start = { ProcessingPanel(current, onCancel = AssessmentStudio::cancel) },
+                        end = {
+                            Text(current.video.displayName, style = VxType.bodySmall, color = InkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(Space.xs))
+                            VideoPreview(current.video.uri, current.video.aspect(), maxHeight = 160.dp)
+                        }
                     )
-                    is StudioState.Completed -> ResultStep(
-                        result = current.result,
-                        video = current.video,
-                        onOpenDiagnostic = { onOpenDiagnostic(current.recordId) },
-                        onNew = AssessmentStudio::reset
-                    )
+                    // Only shown for the moment before the result screen opens.
+                    is StudioState.Completed -> LoadingState(label = "Opening the result…")
                     is StudioState.Inconclusive -> InconclusiveStep(current.result, chooseVideo)
-                    is StudioState.Failed -> FailedStep(current, chooseVideo, onOpenDeveloperOptions)
+                    is StudioState.Failed -> FailedStep(current, chooseVideo, onOpenHistory, onOpenDeveloperOptions)
                 }
             }
         }
     }
+}
+
+private fun blockedOrDenied(blocked: Boolean) = if (blocked) {
+    CameraProblem(
+        "Camera permission is turned off for VigilEx. Turn it on in app settings to record, or choose a video from your device.",
+        needsSettings = true
+    )
+} else {
+    CameraProblem(
+        "VigilEx needs the camera only to record the task. Allow it to record, or choose a video from your device instead.",
+        needsSettings = false
+    )
+}
+
+private fun Context.findActivity(): Activity? {
+    var current: Context? = this
+    while (current is ContextWrapper) {
+        if (current is Activity) return current
+        current = current.baseContext
+    }
+    return null
 }
 
 private fun launchCameraRecording(
@@ -192,7 +254,7 @@ private fun launchCameraRecording(
         )
         onUriReady(uri)
     } catch (e: Exception) {
-        onError("Could not start camera: ${e.localizedMessage ?: "FileProvider failed"}")
+        onError("The camera could not be started: ${e.localizedMessage ?: "no file for the recording"}. Choose a video from your device instead.")
     }
 }
 
@@ -204,7 +266,7 @@ private fun stepFor(state: StudioState): StudioStep = when (state) {
     is StudioState.Failed -> if (state.video == null) StudioStep.SELECT else StudioStep.ANALYZE
 }
 
-/** Video on the left, workflow on the right; stacked on phones. */
+/** Two columns on wide screens; stacked on phones, [start] first. */
 @Composable
 private fun TwoPane(
     start: @Composable ColumnScope.() -> Unit,
@@ -213,7 +275,7 @@ private fun TwoPane(
     if (LocalWindowClass.current == WindowClass.COMPACT) {
         Column(Modifier.fillMaxWidth()) {
             start()
-            Spacer(Modifier.height(Space.xl))
+            Spacer(Modifier.height(Space.lg))
             end()
         }
     } else {
@@ -228,22 +290,15 @@ private fun TwoPane(
 private fun SelectStep(
     busy: Boolean,
     onRecord: () -> Unit,
-    onChoose: () -> Unit,
-    errorMessage: String? = null
+    onChoose: () -> Unit
 ) {
     TwoPane(
-        start = {
-            UploadPanel(
-                onRecord = onRecord,
-                onChoose = onChoose,
-                busy = busy,
-                errorMessage = errorMessage
-            )
-        },
+        start = { UploadPanel(onRecord = onRecord, onChoose = onChoose, busy = busy) },
         end = {
-            Text("BEFORE YOU FILM", style = VxType.label, color = InkMuted)
-            Spacer(Modifier.height(Space.sm))
+            SectionLabel("Before you film")
             CaptureGuidance()
+            Spacer(Modifier.height(Space.md))
+            RecordingTips()
         }
     )
 }
@@ -251,73 +306,37 @@ private fun SelectStep(
 @Composable
 private fun PreviewStep(
     video: SelectedVideo,
+    rejected: String?,
     onRecordAgain: () -> Unit,
-    onChooseAnother: () -> Unit
+    onReplace: () -> Unit
 ) {
+    val compact = LocalWindowClass.current == WindowClass.COMPACT
+    rejected?.let {
+        Callout(
+            title = "That video can't be used",
+            body = "$it Your previous video is still selected.",
+            tone = CalloutTone.ATTENTION
+        )
+        Spacer(Modifier.height(Space.md))
+    }
     TwoPane(
-        start = { VideoPreview(video.uri, video.aspect()) },
+        start = { VideoPreview(video.uri, video.aspect(), maxHeight = if (compact) 260.dp else 420.dp) },
         end = {
-            Text("SELECTED VIDEO", style = VxType.label, color = InkMuted)
-            Spacer(Modifier.height(Space.sm))
-            VideoFacts(video)
-            Spacer(Modifier.height(Space.lg))
+            SelectedVideoSummary(video)
+            Spacer(Modifier.height(Space.md))
             Text(
-                "Analyzing uploads this video to VigilEx, which detects the worker's posture, " +
-                    "tracks them through the video and calculates RULA and REBA. " +
-                    "The result is saved on this device.",
+                "Analyzing uploads this video to the VigilEx server and saves the assessment to your account. " +
+                    "The video on this device is not changed.",
                 style = VxType.bodySmall,
                 color = InkSecondary
             )
             Spacer(Modifier.height(Space.lg))
-            ButtonRow {
-                PrimaryButton(text = "Analyze video", onClick = AssessmentStudio::analyze)
-                SecondaryButton(text = "Record again", onClick = onRecordAgain)
-                SecondaryButton(text = "Choose another", onClick = onChooseAnother)
-            }
+            PrimaryButton(text = "Analyze video", onClick = AssessmentStudio::analyze, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(Space.sm))
+            SecondaryButton(text = "Replace video", onClick = onReplace, modifier = Modifier.fillMaxWidth())
+            ArrowLink("Record a new video", onClick = onRecordAgain)
         }
     )
-}
-
-/**
- * The conclusion, not a celebration: overall risk with RULA and REBA as its
- * evidence, the key finding, and the way into the full assessment.
- */
-@Composable
-private fun ResultStep(
-    result: AnalysisResult,
-    video: SelectedVideo,
-    onOpenDiagnostic: () -> Unit,
-    onNew: () -> Unit
-) {
-    val interpretation = remember(result) { interpret(result) }
-    val compact = LocalWindowClass.current == WindowClass.COMPACT
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        KeySquare(Yellow, size = 10.dp)
-        Spacer(Modifier.width(Space.sm))
-        Text("ASSESSMENT COMPLETE", style = VxType.labelLarge, color = Ink)
-    }
-    Spacer(Modifier.height(Space.xxs))
-    Text(video.displayName, style = VxType.bodySmall, color = InkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    Spacer(Modifier.height(Space.xl))
-
-    val key = interpretation.keyFinding
-    if (compact || key == null) {
-        RiskConclusion(interpretation, showGuidance = false)
-        key?.let {
-            Spacer(Modifier.height(Space.xl))
-            KeyFinding(it)
-        }
-    } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(Space.xxl), verticalAlignment = Alignment.Top) {
-            RiskConclusion(interpretation, Modifier.weight(1.2f), showGuidance = false)
-            KeyFinding(key, Modifier.weight(1f))
-        }
-    }
-    Spacer(Modifier.height(Space.xl))
-    ButtonRow {
-        PrimaryButton(text = "View full assessment", onClick = onOpenDiagnostic, icon = Icons.AutoMirrored.Outlined.ArrowForward)
-        SecondaryButton(text = "New assessment", onClick = onNew)
-    }
 }
 
 @Composable
@@ -325,7 +344,7 @@ private fun InconclusiveStep(result: AnalysisResult, onChooseAnother: () -> Unit
     val sampled = result.video?.framesSampled ?: 0
     val detection = formatPercent(result.quality?.detectionFraction)
     ErrorState(
-        title = "No worker assessed",
+        title = "No worker could be assessed",
         message = "VigilEx analyzed $sampled sampled frames but could not score a worker in any of them " +
             "(worker detected in $detection of frames). Use a side-view video with the worker's whole body in frame. " +
             "This result was not saved.",
@@ -337,24 +356,47 @@ private fun InconclusiveStep(result: AnalysisResult, onChooseAnother: () -> Unit
 }
 
 @Composable
-private fun FailedStep(state: StudioState.Failed, onChooseAnother: () -> Unit, onOpenDeveloperOptions: () -> Unit) {
+private fun FailedStep(
+    state: StudioState.Failed,
+    onChooseAnother: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenDeveloperOptions: () -> Unit
+) {
     val failure = state.failure
     val developer by ServerSettings.developerOptions.collectAsState()
+    state.video?.let {
+        Text("Video: ${it.displayName}", style = VxType.bodySmall, color = InkMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(Space.sm))
+    }
     ErrorState(
         title = failure.title,
         message = failure.message,
         actions = {
-            if (failure.canRetry && state.video != null) {
+            if (failure.canRetry && state.video != null && failure.mayHaveSaved) {
+                // The server may already have saved this analysis: checking History comes first,
+                // so a retry is a deliberate second step rather than a likely duplicate.
+                PrimaryButton(text = "Open history", onClick = onOpenHistory)
+                SecondaryButton(text = "Analyze again", onClick = AssessmentStudio::analyze)
+            } else if (failure.canRetry && state.video != null) {
                 PrimaryButton(text = "Try again", onClick = AssessmentStudio::analyze)
                 SecondaryButton(text = "Choose another video", onClick = onChooseAnother)
             } else {
-                PrimaryButton(text = "Choose video", onClick = onChooseAnother)
+                PrimaryButton(text = "Choose a video", onClick = onChooseAnother)
             }
         }
     )
+    if (failure.mayHaveSaved) {
+        // The server had the whole video, so it may still have saved the assessment.
+        Spacer(Modifier.height(Space.md))
+        Callout(
+            title = "Check History before trying again",
+            body = "The server may still finish this analysis and save it. If it appears in History, " +
+                "open it there instead of analyzing the video again."
+        )
+    }
     if (developer && failure.developerDetail != null) {
-        Text(failure.developerDetail, style = VxType.mono, color = InkMuted)
         Spacer(Modifier.height(Space.sm))
+        Text(failure.developerDetail, style = VxType.mono, color = InkMuted)
     }
     // Only developers can change the server; normal users just retry.
     if (failure.suggestSettings && developer) {

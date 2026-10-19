@@ -47,4 +47,22 @@ class FormatTest {
         assertNull(normalizeServerUrl("ftp://host"))
         assertNull(normalizeServerUrl("not a url"))
     }
+
+    @Test
+    fun `score summary states both methods and marks a missing one`() {
+        assertEquals("RULA 4/7 · REBA 6/15", formatScoreSummary(4, 6))
+        assertEquals("RULA 4/7 · REBA $EMPTY_VALUE", formatScoreSummary(4, null))
+        assertNull(formatScoreSummary(null, null))
+    }
+
+    @Test
+    fun `recent dates are relative and older ones are absolute`() {
+        val now = java.util.Calendar.getInstance().apply { set(2026, 9, 14, 15, 0, 0) }.timeInMillis
+        val earlierToday = java.util.Calendar.getInstance().apply { set(2026, 9, 14, 10, 42, 0) }.timeInMillis
+        val yesterday = java.util.Calendar.getInstance().apply { set(2026, 9, 13, 23, 5, 0) }.timeInMillis
+        val lastWeek = java.util.Calendar.getInstance().apply { set(2026, 9, 7, 9, 0, 0) }.timeInMillis
+        assertEquals("Today · 10:42", formatRelativeDateTime(earlierToday, now))
+        assertEquals("Yesterday · 23:05", formatRelativeDateTime(yesterday, now))
+        assertEquals(formatDateTime(lastWeek), formatRelativeDateTime(lastWeek, now))
+    }
 }

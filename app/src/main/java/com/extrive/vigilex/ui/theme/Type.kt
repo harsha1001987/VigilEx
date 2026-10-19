@@ -12,22 +12,24 @@ private val Sans = FontFamily.SansSerif
 private const val TABULAR = "tnum"
 
 /**
- * VigilEx type roles. Numbers are the primary visual tool, so they get their
- * own scale; labels are small, uppercase and tracked; prose stays sentence case.
+ * VigilEx type roles. Sentence case throughout: headings carry the hierarchy,
+ * labels are small but never tracked capitals, and numbers use tabular figures.
  */
 object VxType {
     val splash = TextStyle(
         fontFamily = Sans,
-        fontWeight = FontWeight.Medium,
-        fontSize = 26.sp,
-        letterSpacing = 14.sp
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 30.sp,
+        letterSpacing = (-0.4).sp
     )
 
+    /** "VigilEx" beside the yellow brand square in headers. */
     val wordmark = TextStyle(
         fontFamily = Sans,
-        fontWeight = FontWeight.Bold,
-        fontSize = 13.sp,
-        letterSpacing = 4.sp
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 18.sp,
+        lineHeight = 22.sp,
+        letterSpacing = (-0.2).sp
     )
 
     val scoreHero = TextStyle(
@@ -57,30 +59,30 @@ object VxType {
         fontFeatureSettings = TABULAR
     )
 
-    /** The assessment conclusion ("MODERATE"): the largest words in the app after the splash. */
+    /** The assessment conclusion ("Moderate risk"). */
     val riskHeadline = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 72.sp,
-        lineHeight = 72.sp,
-        letterSpacing = (-3).sp
+        fontSize = 36.sp,
+        lineHeight = 42.sp,
+        letterSpacing = (-0.8).sp
     )
 
     val riskHeadlineCompact = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 52.sp,
-        lineHeight = 54.sp,
-        letterSpacing = (-2).sp
+        fontSize = 30.sp,
+        lineHeight = 36.sp,
+        letterSpacing = (-0.6).sp
     )
 
-    /** Editorial figure for the key finding, e.g. "107.2°". */
+    /** Figure for the key finding, e.g. "107.2°". */
     val figure = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.Medium,
-        fontSize = 56.sp,
-        lineHeight = 58.sp,
-        letterSpacing = (-2).sp,
+        fontSize = 40.sp,
+        lineHeight = 44.sp,
+        letterSpacing = (-1.2).sp,
         fontFeatureSettings = TABULAR
     )
 
@@ -105,9 +107,9 @@ object VxType {
     val pageTitle = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 34.sp,
-        lineHeight = 40.sp,
-        letterSpacing = (-1.1).sp
+        fontSize = 30.sp,
+        lineHeight = 36.sp,
+        letterSpacing = (-0.8).sp
     )
 
     val pageTitleCompact = TextStyle(
@@ -115,15 +117,15 @@ object VxType {
         fontWeight = FontWeight.SemiBold,
         fontSize = 28.sp,
         lineHeight = 34.sp,
-        letterSpacing = (-0.8).sp
+        letterSpacing = (-0.6).sp
     )
 
     val sectionTitle = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 20.sp,
-        lineHeight = 26.sp,
-        letterSpacing = (-0.3).sp
+        fontSize = 19.sp,
+        lineHeight = 25.sp,
+        letterSpacing = (-0.2).sp
     )
 
     val title = TextStyle(
@@ -143,24 +145,40 @@ object VxType {
     val bodySmall = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.Normal,
-        fontSize = 13.sp,
-        lineHeight = 19.sp
+        fontSize = 14.sp,
+        lineHeight = 20.sp
     )
 
+    /** Metadata, tags, table headers and navigation labels. */
     val label = TextStyle(
         fontFamily = Sans,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 11.sp,
-        lineHeight = 14.sp,
-        letterSpacing = 1.4.sp
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 16.sp
     )
 
+    /** Small emphasized label: section openers inside a card, stage names. */
     val labelLarge = TextStyle(
         fontFamily = Sans,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 13.sp,
-        lineHeight = 16.sp,
-        letterSpacing = 1.2.sp
+        fontSize = 14.sp,
+        lineHeight = 18.sp
+    )
+
+    /** Text on buttons. */
+    val button = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        lineHeight = 20.sp
+    )
+
+    /** Inline links such as "View all". */
+    val link = TextStyle(
+        fontFamily = Sans,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 18.sp
     )
 
     val tableCell = TextStyle(
@@ -187,6 +205,6 @@ val Typography = Typography(
     titleMedium = VxType.title,
     bodyLarge = VxType.body,
     bodyMedium = VxType.bodySmall,
-    labelLarge = VxType.labelLarge,
+    labelLarge = VxType.button,
     labelSmall = VxType.label
 )

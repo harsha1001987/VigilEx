@@ -1,6 +1,7 @@
 package com.extrive.vigilex.ui.format
 
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -57,3 +58,24 @@ fun formatDateTime(millis: Long): String =
 
 fun formatShortDate(millis: Long): String =
     SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(millis))
+
+/** "RULA 4/7 · REBA 6/15", a dash for a method that was not scored. Null when neither was. */
+fun formatScoreSummary(rula: Int?, reba: Int?, rulaMax: Int = 7, rebaMax: Int = 15): String? {
+    if (rula == null && reba == null) return null
+    val part = { label: String, score: Int?, max: Int -> "$label ${score?.let { "$it/$max" } ?: EMPTY_VALUE}" }
+    return "${part("RULA", rula, rulaMax)} · ${part("REBA", reba, rebaMax)}"
+}
+
+/** "Today · 10:42", "Yesterday · 10:42", otherwise the full date and time. */
+fun formatRelativeDateTime(millis: Long, now: Long = System.currentTimeMillis()): String {
+    val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(millis))
+    val yesterday = Calendar.getInstance().apply { timeInMillis = now; add(Calendar.DAY_OF_YEAR, -1) }.timeInMillis
+    return when (dayKey(millis)) {
+        dayKey(now) -> "Today · $time"
+        dayKey(yesterday) -> "Yesterday · $time"
+        else -> formatDateTime(millis)
+    }
+}
+
+private fun dayKey(millis: Long): Int =
+    Calendar.getInstance().apply { timeInMillis = millis }.let { it.get(Calendar.YEAR) * 1000 + it.get(Calendar.DAY_OF_YEAR) }

@@ -32,7 +32,11 @@ import com.extrive.vigilex.ui.format.formatDegrees
 import com.extrive.vigilex.ui.format.formatDegreesNumber
 import com.extrive.vigilex.ui.format.formatScale
 import com.extrive.vigilex.ui.format.formatScore
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.semantics.Role
+import com.extrive.vigilex.ui.theme.HairlineStrong
 import com.extrive.vigilex.ui.theme.Ink
+import com.extrive.vigilex.ui.theme.Size
 import com.extrive.vigilex.ui.theme.InkFaint
 import com.extrive.vigilex.ui.theme.InkMuted
 import com.extrive.vigilex.ui.theme.Space
@@ -121,7 +125,7 @@ fun BodyMetricBlock(
     Column(modifier) {
         Hairline()
         Spacer(Modifier.height(Space.sm))
-        Text(metric.label.uppercase(), style = VxType.label, color = Ink)
+        Text(metric.label, style = VxType.title, color = Ink)
         Spacer(Modifier.height(Space.md))
         Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
             AngleFigure(angles?.average(metric), "Avg", emphasized = true)
@@ -147,7 +151,7 @@ private fun AngleFigure(value: Double?, label: String, emphasized: Boolean) {
         if (value != null) Text("°", style = style, color = InkMuted)
         Spacer(Modifier.width(Space.xs))
         Text(
-            label.uppercase(),
+            label.lowercase(),
             style = VxType.label,
             color = InkMuted,
             modifier = Modifier.padding(bottom = 5.dp)
@@ -198,7 +202,7 @@ fun DataTable(
         ) {
             columns.forEach { column ->
                 Text(
-                    column.header.uppercase(),
+                    column.header,
                     style = VxType.label,
                     color = InkMuted,
                     textAlign = column.align,
@@ -206,13 +210,14 @@ fun DataTable(
                 )
             }
         }
-        Hairline(color = Ink)
+        Hairline(color = HairlineStrong)
         repeat(rowCount) { row ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(if (onRowClick != null) Modifier.clickable { onRowClick(row) } else Modifier)
-                    .padding(vertical = Space.md),
+                    .then(if (onRowClick != null) Modifier.clickable(role = Role.Button) { onRowClick(row) } else Modifier)
+                    .heightIn(min = Size.touchTarget)
+                    .padding(vertical = Space.sm),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 columns.forEachIndexed { index, column ->
@@ -280,7 +285,8 @@ fun KeyValueTable(rows: List<Pair<String, String>>, modifier: Modifier = Modifie
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(label, style = VxType.bodySmall, color = InkMuted, modifier = Modifier.weight(1f))
-                Text(value, style = VxType.mono.copy(fontSize = VxType.tableCell.fontSize), color = Ink)
+                Spacer(Modifier.width(Space.md))
+                Text(value, style = VxType.tableCell, color = Ink, textAlign = TextAlign.End)
             }
             Hairline()
         }

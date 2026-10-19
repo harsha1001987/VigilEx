@@ -4,9 +4,22 @@ import android.app.Activity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.text.font.FontWeight
+import com.extrive.vigilex.ui.theme.Ink
+import com.extrive.vigilex.ui.theme.InkMuted
+import com.extrive.vigilex.ui.theme.Radius
+import com.extrive.vigilex.ui.theme.Surface
+import com.extrive.vigilex.ui.theme.SurfaceSunken
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -31,7 +44,6 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -44,14 +56,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import com.extrive.vigilex.navigation.TopLevel
-import com.extrive.vigilex.ui.theme.Black
 import com.extrive.vigilex.ui.theme.Canvas
-import com.extrive.vigilex.ui.theme.InkOnDark
-import com.extrive.vigilex.ui.theme.InkOnDarkMuted
 import com.extrive.vigilex.ui.theme.Motion
+import com.extrive.vigilex.ui.theme.Size
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
 import com.extrive.vigilex.ui.theme.Yellow
@@ -62,7 +71,8 @@ val LocalWindowClass = staticCompositionLocalOf { WindowClass.COMPACT }
 
 /**
  * Root layout. Phones get a bottom bar, tablets a rail, large screens a
- * sidebar; the navigation surface is black so the content canvas stays calm.
+ * sidebar; all three are white with a hairline edge and a yellow mark on the
+ * current destination.
  * All three carry the same four destinations; Profile and Settings live in
  * the header's account menu.
  */
@@ -91,8 +101,7 @@ fun AppShell(
                 val window = (view.context as Activity).window
                 WindowCompat.getInsetsController(window, view).apply {
                     isAppearanceLightStatusBars = true
-                    // The compact bottom bar is black, so its system buttons must be light.
-                    isAppearanceLightNavigationBars = !showNavigation || windowClass != WindowClass.COMPACT
+                    isAppearanceLightNavigationBars = true
                 }
             }
         }
@@ -137,7 +146,7 @@ fun AppShell(
 @Composable
 private fun navColor(active: Boolean): Color {
     val color by animateColorAsState(
-        targetValue = if (active) Yellow else InkOnDarkMuted,
+        targetValue = if (active) Ink else InkMuted,
         animationSpec = tween(Motion.fast),
         label = "navColor"
     )
@@ -146,37 +155,49 @@ private fun navColor(active: Boolean): Color {
 
 @Composable
 private fun BottomBar(current: TopLevel?, analysisRunning: Boolean, onNavigate: (TopLevel) -> Unit) {
-    Row(
-        modifier = Modifier
+    Column(
+        Modifier
             .fillMaxWidth()
-            .background(Black)
+            .background(Surface)
             .windowInsetsPadding(WindowInsets.navigationBars)
-            .height(64.dp)
     ) {
-        TopLevel.entries.forEach { item ->
-            val active = item == current
-            val color = navColor(active)
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .navItemSemantics(active) { onNavigate(item) },
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Box(
+        Hairline()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Size.bottomBar)
+                .selectableGroup()
+        ) {
+            TopLevel.entries.forEach { item ->
+                val active = item == current
+                val color = navColor(active)
+                Column(
                     modifier = Modifier
-                        .width(20.dp)
-                        .height(2.dp)
-                        .background(if (active) Yellow else Color.Transparent)
-                )
-                Spacer(Modifier.height(Space.xs))
-                Box {
-                    Icon(item.icon, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
-                    if (item == TopLevel.ASSESSMENT && analysisRunning) RunningDot(Modifier.align(Alignment.TopEnd))
+                        .weight(1f)
+                        .heightIn(min = Size.bottomBar)
+                        .navItemSemantics(item.label, active, item == TopLevel.ASSESSMENT && analysisRunning) { onNavigate(item) },
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(28.dp)
+                            .height(3.dp)
+                            .background(if (active) Yellow else Color.Transparent, RoundedCornerShape(bottomStart = 2.dp, bottomEnd = 2.dp))
+                    )
+                    Spacer(Modifier.height(Space.xs))
+                    Box {
+                        Icon(item.icon, contentDescription = null, tint = color, modifier = Modifier.size(Size.icon))
+                        if (item == TopLevel.ASSESSMENT && analysisRunning) RunningDot(Modifier.align(Alignment.TopEnd))
+                    }
+                    Spacer(Modifier.height(Space.xxs))
+                    Text(
+                        item.label,
+                        style = VxType.label.copy(fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium),
+                        color = color,
+                        maxLines = 1
+                    )
+                    Spacer(Modifier.height(Space.xs))
                 }
-                Spacer(Modifier.height(Space.xxs))
-                Text(item.label.uppercase(), style = VxType.label.copy(letterSpacing = 0.8.sp), color = color)
             }
         }
     }
@@ -188,26 +209,35 @@ private fun Rail(
     analysisRunning: Boolean,
     onNavigate: (TopLevel) -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .width(92.dp)
-            .fillMaxHeight()
-            .background(Black)
-            .padding(vertical = Space.lg),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("VX", style = VxType.wordmark, color = InkOnDark)
-        Spacer(Modifier.height(Space.xxl))
-        TopLevel.entries.forEach { item ->
-            RailItem(
-                label = item.label,
-                icon = item.icon,
-                active = item == current,
-                showDot = item == TopLevel.ASSESSMENT && analysisRunning,
-                onClick = { onNavigate(item) }
+    Row(Modifier.fillMaxHeight()) {
+        Column(
+            modifier = Modifier
+                .width(92.dp)
+                .fillMaxHeight()
+                .background(Surface)
+                .padding(vertical = Space.lg)
+                .selectableGroup(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                Modifier
+                    .size(14.dp)
+                    .background(Yellow, RoundedCornerShape(2.dp))
+                    .semantics { contentDescription = "VigilEx" }
             )
-            Spacer(Modifier.height(Space.md))
+            Spacer(Modifier.height(Space.xxl))
+            TopLevel.entries.forEach { item ->
+                RailItem(
+                    label = item.label,
+                    icon = item.icon,
+                    active = item == current,
+                    showDot = item == TopLevel.ASSESSMENT && analysisRunning,
+                    onClick = { onNavigate(item) }
+                )
+                Spacer(Modifier.height(Space.sm))
+            }
         }
+        VerticalHairline(Modifier.fillMaxHeight())
     }
 }
 
@@ -217,16 +247,21 @@ private fun RailItem(label: String, icon: ImageVector, active: Boolean, showDot:
     Column(
         modifier = Modifier
             .width(76.dp)
-            .navItemSemantics(active, onClick)
+            .navItemSemantics(label, active, showDot, onClick)
             .padding(vertical = Space.xs),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Box {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(24.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(if (active) Yellow else Color.Transparent)
+                .padding(horizontal = 18.dp, vertical = 4.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(Size.icon))
             if (showDot) RunningDot(Modifier.align(Alignment.TopEnd))
         }
-        Spacer(Modifier.height(6.dp))
-        Text(label.uppercase(), style = VxType.label.copy(letterSpacing = 0.8.sp), color = color)
+        Spacer(Modifier.height(Space.xxs))
+        Text(label, style = VxType.label, color = color, maxLines = 1)
     }
 }
 
@@ -236,38 +271,41 @@ private fun Sidebar(
     analysisRunning: Boolean,
     onNavigate: (TopLevel) -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .width(240.dp)
-            .fillMaxHeight()
-            .background(Black)
-            .padding(vertical = Space.xl)
-    ) {
-        Text(
-            "VIGILEX",
-            style = VxType.wordmark,
-            color = InkOnDark,
-            modifier = Modifier.padding(horizontal = Space.lg)
-        )
-        Spacer(Modifier.height(Space.xxxl))
-        TopLevel.entries.forEach { item ->
-            SidebarItem(item.label, item == current, item == TopLevel.ASSESSMENT && analysisRunning) { onNavigate(item) }
+    Row(Modifier.fillMaxHeight()) {
+        Column(
+            modifier = Modifier
+                .width(240.dp)
+                .fillMaxHeight()
+                .background(Surface)
+                .padding(vertical = Space.lg)
+                .selectableGroup()
+        ) {
+            Wordmark(Modifier.padding(horizontal = Space.lg))
+            Spacer(Modifier.height(Space.xxl))
+            TopLevel.entries.forEach { item ->
+                SidebarItem(
+                    item.label,
+                    item.icon,
+                    item == current,
+                    item == TopLevel.ASSESSMENT && analysisRunning
+                ) { onNavigate(item) }
+            }
         }
+        VerticalHairline(Modifier.fillMaxHeight())
     }
 }
 
 @Composable
-private fun SidebarItem(label: String, active: Boolean, showDot: Boolean, onClick: () -> Unit) {
-    val textColor by animateColorAsState(
-        targetValue = if (active) InkOnDark else InkOnDarkMuted,
-        animationSpec = tween(Motion.fast),
-        label = "sidebarText"
-    )
+private fun SidebarItem(label: String, icon: ImageVector, active: Boolean, showDot: Boolean, onClick: () -> Unit) {
+    val textColor = navColor(active)
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)
-            .navItemSemantics(active, onClick),
+            .padding(horizontal = Space.sm, vertical = 2.dp)
+            .clip(Radius.medium)
+            .background(if (active) SurfaceSunken else Color.Transparent)
+            .heightIn(min = Size.touchTarget)
+            .navItemSemantics(label, active, showDot, onClick),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
@@ -276,8 +314,10 @@ private fun SidebarItem(label: String, active: Boolean, showDot: Boolean, onClic
                 .height(20.dp)
                 .background(if (active) Yellow else Color.Transparent)
         )
-        Spacer(Modifier.width(Space.lg - 3.dp))
-        Text(label, style = VxType.title, color = textColor)
+        Spacer(Modifier.width(Space.sm))
+        Icon(icon, contentDescription = null, tint = textColor, modifier = Modifier.size(Size.icon - 2.dp))
+        Spacer(Modifier.width(Space.sm))
+        Text(label, style = VxType.title.copy(fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal), color = textColor)
         if (showDot) {
             Spacer(Modifier.width(Space.xs))
             RunningDot()
@@ -296,16 +336,26 @@ private fun RunningDot(modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * One tappable, selectable destination. The label is announced once with its
+ * selected state, and "analysis in progress" when the running dot shows.
+ */
 @Composable
-private fun Modifier.navItemSemantics(active: Boolean, onClick: () -> Unit): Modifier {
+private fun Modifier.navItemSemantics(label: String, active: Boolean, running: Boolean, onClick: () -> Unit): Modifier {
     val interaction = remember { MutableInteractionSource() }
     return this
-        .semantics { selected = active }
-        .clickable(
+        .selectable(
+            selected = active,
             interactionSource = interaction,
-            indication = ripple(color = Yellow),
+            indication = ripple(color = Ink),
             role = Role.Tab,
             onClick = onClick
         )
+        .clearAndSetSemantics {
+            contentDescription = if (running) "$label, analysis in progress" else label
+            selected = active
+            role = Role.Tab
+            onClick(label = label) { onClick(); true }
+        }
 }
 

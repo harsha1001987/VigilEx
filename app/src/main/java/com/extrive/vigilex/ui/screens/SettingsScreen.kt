@@ -4,9 +4,21 @@ import android.content.Context
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.extrive.vigilex.ui.components.Callout
+import com.extrive.vigilex.ui.components.CalloutTone
+import com.extrive.vigilex.ui.components.ConfirmDialog
+import com.extrive.vigilex.ui.components.InfoDialog
+import com.extrive.vigilex.ui.components.SettingsGroup
+import com.extrive.vigilex.ui.format.EMPTY_VALUE
+import com.extrive.vigilex.ui.theme.RedInk
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -28,11 +40,7 @@ import com.extrive.vigilex.ui.components.PageContainer
 import com.extrive.vigilex.ui.components.PageHeader
 import com.extrive.vigilex.ui.components.SectionLabel
 import com.extrive.vigilex.ui.components.SettingsRow
-import com.extrive.vigilex.ui.theme.Ink
-import com.extrive.vigilex.ui.theme.InkFaint
 import com.extrive.vigilex.ui.theme.InkMuted
-import com.extrive.vigilex.ui.theme.InkSecondary
-import com.extrive.vigilex.ui.theme.Red
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
 import kotlinx.coroutines.launch
@@ -70,106 +78,106 @@ fun SettingsScreen(
     var versionTaps by remember { mutableIntStateOf(0) }
 
     PageContainer {
-        PageHeader(eyebrow = "VigilEx", title = "Settings", onBack = onBack)
+        PageHeader(title = "Settings", onBack = onBack)
 
         SectionLabel("Account")
-        val current = account
-        if (current != null) {
-            SettingsRow("Name", value = current.name)
-            SettingsRow("Email", value = current.email)
-            SettingsRow("Profile", onClick = onOpenProfile)
-        } else {
-            SettingsRow("Profile", value = "Not signed in", onClick = onOpenProfile)
+        SettingsGroup {
+            val current = account
+            SettingsRow(
+                "Profile",
+                supporting = current?.email ?: "Not signed in",
+                icon = Icons.Outlined.Person,
+                divider = false,
+                onClick = onOpenProfile
+            )
         }
-        Spacer(Modifier.height(Space.xxl))
+        Spacer(Modifier.height(Space.lg))
 
         SectionLabel("Data")
         val canClear = (savedCount ?: 0) > 0 && !clearing
-        SettingsRow(
-            "Saved assessments",
-            value = savedCount?.toString()
-        )
-        SettingsRow(
-            if (clearing) "Clearing assessment history…" else "Clear assessment history",
-            labelColor = if (canClear) Red else InkFaint,
-            onClick = if (canClear) ({ confirmClear = true }) else null
-        )
+        SettingsGroup {
+            SettingsRow(
+                "Saved assessments",
+                icon = Icons.Outlined.Inventory2,
+                value = savedCount?.toString() ?: EMPTY_VALUE
+            )
+            SettingsRow(
+                if (clearing) "Clearing assessment history…" else "Clear assessment history",
+                supporting = "Deletes every assessment and report on your account",
+                icon = Icons.Outlined.DeleteOutline,
+                labelColor = if (canClear) RedInk else InkMuted,
+                chevron = false,
+                divider = false,
+                onClick = if (canClear) ({ confirmClear = true }) else null
+            )
+        }
         clearNote?.let {
             Spacer(Modifier.height(Space.xs))
-            Text(it, style = VxType.bodySmall, color = Red)
+            Callout(title = "Not everything was deleted", body = it, tone = CalloutTone.ERROR)
         }
-        Spacer(Modifier.height(Space.sm))
+        Spacer(Modifier.height(Space.xs))
         Text(
-            "Assessments are saved on the VigilEx server. Overview, History and Reports are built from them. " +
-                "Your videos stay in your gallery or files.",
+            "Assessments are saved to your account on the VigilEx server; Overview, History and Reports are built " +
+                "from them. Videos on this device stay in your gallery or files.",
             style = VxType.bodySmall,
             color = InkMuted,
             modifier = Modifier.widthIn(max = 560.dp)
         )
-        Spacer(Modifier.height(Space.xxl))
+        Spacer(Modifier.height(Space.lg))
 
         SectionLabel("About")
-        SettingsRow(
-            "VigilEx",
-            value = version?.let { "Version $it" },
-            chevron = false,
-            // Release builds unlock Developer options with repeated taps, as Android does.
-            onClick = if (developer || version == null) null else ({
-                versionTaps++
-                if (versionTaps >= DEVELOPER_TAPS) ServerSettings.enableDeveloperOptions()
-            })
-        )
-        SettingsRow("Privacy", onClick = { showPrivacy = true })
-        SettingsRow("Terms", value = "Not available")
-
-        if (developer) {
-            Spacer(Modifier.height(Space.xxl))
-            SettingsRow("Developer options", labelColor = InkMuted, onClick = onOpenDeveloperOptions)
+        SettingsGroup {
+            SettingsRow(
+                "VigilEx",
+                icon = Icons.Outlined.Info,
+                value = version?.let { "Version $it" },
+                chevron = false,
+                // Release builds unlock Developer options with repeated taps, as Android does.
+                onClick = if (developer || version == null) null else ({
+                    versionTaps++
+                    if (versionTaps >= DEVELOPER_TAPS) ServerSettings.enableDeveloperOptions()
+                })
+            )
+            SettingsRow("Privacy", icon = Icons.Outlined.Shield, divider = developer, onClick = { showPrivacy = true })
+            if (developer) {
+                SettingsRow(
+                    "Developer options",
+                    supporting = "Analysis server address",
+                    icon = Icons.Outlined.Code,
+                    divider = false,
+                    onClick = onOpenDeveloperOptions
+                )
+            }
         }
     }
 
     if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Delete all assessments?", style = VxType.sectionTitle) },
-            text = { Text("This cannot be undone.", style = VxType.body, color = InkSecondary) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmClear = false
-                    clearing = true
-                    clearNote = null
-                    scope.launch {
-                        clearNote = clearAll(repository)
-                        clearing = false
-                    }
-                }) { Text("DELETE", style = VxType.labelLarge, color = Red) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmClear = false }) {
-                    Text("CANCEL", style = VxType.labelLarge, color = Ink)
+        ConfirmDialog(
+            title = "Delete all assessments?",
+            message = "Every assessment and report on your account is permanently deleted. This cannot be undone.",
+            confirmLabel = "Delete all",
+            destructive = true,
+            onDismiss = { confirmClear = false },
+            onConfirm = {
+                confirmClear = false
+                clearing = true
+                clearNote = null
+                scope.launch {
+                    clearNote = clearAll(repository)
+                    clearing = false
                 }
             }
         )
     }
 
     if (showPrivacy) {
-        AlertDialog(
-            onDismissRequest = { showPrivacy = false },
-            title = { Text("Privacy", style = VxType.sectionTitle) },
-            text = {
-                Text(
-                    "When you analyze a video, VigilEx uploads it to the VigilEx analysis service to measure " +
-                        "posture and calculate RULA and REBA. The assessment result is saved on this device " +
-                        "and can be deleted at any time from Settings. The original video is not changed.",
-                    style = VxType.body,
-                    color = InkSecondary
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { showPrivacy = false }) {
-                    Text("DONE", style = VxType.labelLarge, color = Ink)
-                }
-            }
+        InfoDialog(
+            title = "Privacy",
+            message = "When you analyze a video, VigilEx uploads it to the VigilEx server you are signed in to, " +
+                "which measures posture and calculates RULA and REBA. The assessment is saved to your account on " +
+                "that server. You can delete an assessment from its page, or all of them here in Settings. " +
+                "The video on this device is not changed. Signing out removes downloaded reports from this device.",
+            onDismiss = { showPrivacy = false }
         )
     }
 }

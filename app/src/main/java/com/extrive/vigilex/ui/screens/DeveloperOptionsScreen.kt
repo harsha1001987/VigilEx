@@ -63,7 +63,7 @@ fun DeveloperOptionsScreen(onBack: () -> Unit) {
     }
 
     PageContainer {
-        PageHeader(eyebrow = "Settings", title = "Developer options", onBack = onBack)
+        PageHeader(title = "Developer options", supporting = "For development and testing only.", onBack = onBack)
 
         SectionLabel("Analysis server")
         Text(
@@ -88,7 +88,7 @@ fun DeveloperOptionsScreen(onBack: () -> Unit) {
             keyboardType = KeyboardType.Uri,
             imeAction = ImeAction.Done,
             onImeAction = { save() },
-            textStyle = VxType.metricSmall
+            textStyle = VxType.body
         )
         Spacer(Modifier.height(Space.xs))
         if (inputError == null) {

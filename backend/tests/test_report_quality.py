@@ -128,15 +128,15 @@ def test_report_still_generates_when_product_content_is_missing(tmp_path, monkey
     content, text = _rendered(frames, tmp_path)
     assert content.product_recommendations == []
     assert reports.PRODUCT_SECTION not in content.sections
-    assert "PROTECT THE BACK" in text and "RECOMMENDED PRODUCT TO EVALUATE" not in text
+    assert "Protect the back" in text and reports.PRODUCT_SECTION not in text
     # A product entry without approved text: shown as pending, never invented.
     partial = tmp_path / "partial.json"
     partial.write_text(json.dumps({"products": {"backex": {"name": "BackEX", "trigger": {"area": "back"}}}}))
     monkeypatch.setattr(products, "CATALOGUE_PATH", partial)
     content, text = _rendered(frames, tmp_path)
     assert content.product_recommendations[0].content_status == "incomplete"
-    assert "PRODUCT INFORMATION PENDING" in text
-    assert "WHY IT MAY HELP" not in text
+    assert "Product information pending" in text
+    assert "Why it may help" not in text
 
 
 # ================================================================ reliability / not measured
@@ -150,7 +150,7 @@ def test_oblique_view_produces_a_limited_reliability_notice(tmp_path):
     assert rel.side_on_fraction == 0.0
     assert any("side-on in only 0%" in r for r in rel.reasons)
     assert "record a new video" in rel.recommendation
-    assert "LIMITED MEASUREMENT RELIABILITY" in text
+    assert "Limited measurement reliability" in text
     # Repeated in the technical limitations.
     assert any(l.startswith("Limited measurement reliability:") for l in content.limitations)
 
@@ -161,7 +161,7 @@ def test_side_on_view_reports_no_limitation_without_claiming_confidence(tmp_path
     assert rel.status == "no_limitation_detected" and rel.title is None and rel.reasons == []
     assert "reliable" not in (rel.title or "")
     assert "This is not a confidence rating" in text
-    assert "LIMITED MEASUREMENT RELIABILITY" not in text
+    assert "Limited measurement reliability" not in text
 
 
 def test_unobservable_region_is_never_reported_as_low_risk(tmp_path):
@@ -222,17 +222,86 @@ def test_api_report_and_pdf_carry_the_same_recommendation_and_explanations(clien
     rec = detail["product_recommendations"][0]
     assert rec["name"] == "BackEX" and rec["role"] == "primary"
 
-    order = [h.upper() for h in report["sections"]]
-    assert order[:4] == ["OVERALL ASSESSMENT", "PRIORITY ACTION", "RECOMMENDED PRODUCT TO EVALUATE", "OTHER ACTIONS"]
-    assert order[-1] == "TECHNICAL DETAILS AND ASSESSMENT LIMITATIONS"
+    order = report["sections"]
+    assert order[:4] == ["Overall assessment", "Priority action", "Recommended product to evaluate", "Other actions"]
+    assert order[-1] == "Technical details and assessment limitations"
     positions = [text.index(h) for h in order]
     assert positions == sorted(positions)
     assert "EVALUATE BACKEX FOR THIS TASK" in text.upper()
-    assert "WHY IT MAY HELP" in text
-    assert "BEST RESULTS COME FROM COMBINING APPROACHES" in text
-    assert "COMPONENT MEASUREMENTS AT THE PEAK-SCORE FRAME" in text
+    assert "Why it may help" in text
+    assert "Best results come from combining approaches" in text
+    assert "Component measurements at the peak-score frame" in text
     # Implementation detail lives only in the technical appendix.
-    appendix = text.index("TECHNICAL DETAILS AND ASSESSMENT LIMITATIONS")
+    appendix = text.index("Technical details and assessment limitations")
     assert text.index("YOLO11n-Pose") > appendix and text.index("ByteTrack") > appendix
     if report["measurement_reliability"]["status"] == "limited":
-        assert "LIMITED MEASUREMENT RELIABILITY" in text
+        assert "Limited measurement reliability" in text
+
+
+# ================================================================ PDF layout
+
+def test_pdf_numbers_every_page_and_puts_key_findings_before_the_priority_action(tmp_path):
+    content, text = _rendered([_frame(_pose(trunk_lean=30, knee_bend=100), t=i) for i in range(5)], tmp_path)
+    pages = int(re.search(r"Page 1 of (\d+)", text).group(1))
+    assert pages >= 2
+    for n in range(1, pages + 1):
+        assert f"Page {n} of {pages}" in text
+    assert content.findings
+    findings = text.index("Key findings")
+    for finding in content.findings:
+        assert finding.title in text
+        assert findings < text.index(finding.title) < text.index("Priority action")
+
+
+def test_pdf_wraps_a_long_name_and_leaves_out_missing_metadata(tmp_path):
+    frames = [_frame(_pose(trunk_lean=30), t=i) for i in range(4)]
+    a = _assessment(frames)
+    a.created_at = a.updated_at = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    a.methodology_version = "test"
+    a.scores = []
+    long_name = "Warehouse_line_3_pallet_restacking_side_view_" * 4 + ".mp4"
+    a.capture_metadata = {"upload": {"original_filename": long_name}, "video": {}}
+    content = reports.build_report_content(a)
+    assert content.video_name == long_name and content.duration_sec is None
+    target = tmp_path / "long.pdf"
+    reports.render_pdf(a, content, target)
+    text = _pdf_text(target.read_bytes())
+    # The whole name is printed (wrapped over lines, not clipped); no duration is invented.
+    assert long_name.replace(" ", "") in text.replace(" ", "")
+    assert "Video duration" not in text
+
+
+def test_pdf_summary_page_names_every_recommended_action_in_priority_order(tmp_path):
+    content, text = _rendered([_frame(_pose(trunk_lean=30, knee_bend=100, neck_bend=40), t=i) for i in range(5)], tmp_path)
+    assert content.interventions
+    summary = text.index("Recommended actions")
+    assert text.index("Key findings") < summary < text.index("Priority action")
+    # First mention of each action is on the summary list, in the backend's order.
+    positions = [text.index(item.title) for item in content.interventions]
+    assert positions == sorted(positions) and positions[0] > summary
+    assert positions[-1] < text.index("Priority action")
+
+
+def test_pdf_states_a_camera_view_limitation_once_in_full(tmp_path):
+    content, text = _rendered([_frame(_pose(trunk_lean=15), t=i, yaw=70) for i in range(4)], tmp_path)
+    rel = content.measurement_reliability
+    assert rel.status == "limited"
+    # The notice on the summary page carries the reasons; later sections refer back to it.
+    for reason in rel.reasons:
+        assert text.count(reason[:40]) == 1
+    assert "given under Overall assessment" in text
+
+
+def test_pdf_has_no_blank_trailing_page(tmp_path):
+    a = _assessment([_frame(_pose(trunk_lean=30, knee_bend=100, neck_bend=40), t=i) for i in range(5)])
+    a.created_at = a.updated_at = datetime(2026, 10, 9, tzinfo=timezone.utc)
+    a.methodology_version = "test"
+    a.scores = []
+    target = tmp_path / "pages.pdf"
+    reports.render_pdf(a, reports.build_report_content(a), target)
+    data = target.read_bytes()
+    pages = int(re.search(rb"/Count (\d+)", data).group(1))
+    text = _pdf_text(data)
+    # The last thing printed (the methodology version) is on the last page.
+    assert f"Page {pages} of {pages}" in text
+    assert text.index("Methodology version") > text.index(f"Page {pages - 1} of {pages}")

@@ -1,12 +1,8 @@
 package com.extrive.vigilex.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -18,14 +14,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.extrive.vigilex.data.model.MeasurementReliabilityDto
 import com.extrive.vigilex.data.model.ProductRecommendationDto
-import com.extrive.vigilex.ui.theme.Gold
 import com.extrive.vigilex.ui.theme.GoldInk
-import com.extrive.vigilex.ui.theme.GoldTint
 import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkMuted
 import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Space
-import com.extrive.vigilex.ui.theme.SurfaceSunken
 import com.extrive.vigilex.ui.theme.VxType
 
 /*
@@ -58,15 +51,9 @@ const val NO_VIEW_LIMITATION =
  */
 @Composable
 fun ProductRecommendation(product: ProductRecommendationDto, modifier: Modifier = Modifier) {
-    Row(
-        modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .background(SurfaceSunken)
-    ) {
-        Box(Modifier.width(4.dp).fillMaxHeight().background(Ink))
-        Column(Modifier.padding(horizontal = Space.lg, vertical = Space.lg)) {
-            Text(listOfNotNull(product.maker, product.category).joinToString(" · ").uppercase(), style = VxType.label, color = InkMuted)
+    VxCard(modifier) {
+        Column {
+            Text(listOfNotNull(product.maker, product.category).joinToString(" · "), style = VxType.label, color = InkMuted)
             Spacer(Modifier.height(Space.xs))
             Text(product.headline, style = VxType.sectionTitle, color = Ink)
             Spacer(Modifier.height(Space.md))
@@ -117,7 +104,7 @@ fun ProductRecommendation(product: ProductRecommendationDto, modifier: Modifier 
 
 @Composable
 private fun ProductHeading(text: String, color: Color = Ink) {
-    Text(text.uppercase(), style = VxType.label, color = color)
+    Text(text, style = VxType.labelLarge, color = color)
     Spacer(Modifier.height(Space.xs))
 }
 
@@ -139,26 +126,12 @@ private fun Bullets(items: List<String>) {
 @Composable
 fun ReliabilityNotice(reliability: MeasurementReliabilityDto?, modifier: Modifier = Modifier) {
     if (reliability == null || !reliability.limited) return
-    Row(
-        modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .background(GoldTint)
-    ) {
-        Box(Modifier.width(4.dp).fillMaxHeight().background(Gold))
-        Column(Modifier.padding(horizontal = Space.lg, vertical = Space.md)) {
-            Text((reliability.title ?: "Limited measurement reliability").uppercase(), style = VxType.label, color = GoldInk)
-            Spacer(Modifier.height(Space.xs))
-            reliability.reasons.forEach {
-                Text(it, style = VxType.bodySmall, color = Ink)
-                Spacer(Modifier.height(2.dp))
-            }
-            reliability.recommendation?.let {
-                Spacer(Modifier.height(Space.xs))
-                Text(it, style = VxType.bodySmall, color = InkSecondary)
-            }
-        }
-    }
+    Callout(
+        title = reliability.title ?: "Limited measurement reliability",
+        body = (reliability.reasons + listOfNotNull(reliability.recommendation)).joinToString("\n"),
+        tone = CalloutTone.ATTENTION,
+        modifier = modifier
+    )
 }
 
 /** The camera-view explanation, this assessment's view values, and the limitation when there is one. */

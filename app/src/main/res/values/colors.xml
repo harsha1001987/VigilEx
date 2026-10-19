@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="vigilex_yellow">#FFFFD21F</color>
+    <color name="vigilex_yellow">#FFF4C928</color>
+    <color name="vigilex_canvas">#FFF7F7F4</color>
 </resources>

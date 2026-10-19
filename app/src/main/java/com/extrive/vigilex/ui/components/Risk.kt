@@ -27,6 +27,13 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import com.extrive.vigilex.data.insight.InterpretationRules
+import com.extrive.vigilex.data.insight.RiskLevel
+import com.extrive.vigilex.ui.theme.Border
 import com.extrive.vigilex.data.model.Method
 import com.extrive.vigilex.data.model.RiskTone
 import com.extrive.vigilex.data.model.Severity
@@ -34,23 +41,20 @@ import com.extrive.vigilex.data.model.orderedDistribution
 import com.extrive.vigilex.data.model.riskName
 import com.extrive.vigilex.data.model.riskTone
 import com.extrive.vigilex.ui.theme.Gold
-import com.extrive.vigilex.ui.theme.GoldTint
 import com.extrive.vigilex.ui.theme.Green
-import com.extrive.vigilex.ui.theme.GreenTint
 import com.extrive.vigilex.ui.theme.HairlineStrong
 import com.extrive.vigilex.ui.theme.Ink
 import com.extrive.vigilex.ui.theme.InkFaint
 import com.extrive.vigilex.ui.theme.InkMuted
-import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Motion
 import com.extrive.vigilex.ui.theme.Radius
 import com.extrive.vigilex.ui.theme.Red
+import com.extrive.vigilex.ui.theme.RedInk
 import com.extrive.vigilex.ui.theme.RedTint
 import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.SurfaceSunken
 import com.extrive.vigilex.ui.theme.VxType
 import com.extrive.vigilex.ui.theme.VeryHighRed
-import com.extrive.vigilex.ui.theme.White
 import kotlin.math.roundToInt
 
 
@@ -64,58 +68,87 @@ fun RiskTone.color(): Color = when (this) {
     RiskTone.UNKNOWN -> HairlineStrong
 }
 
-private fun RiskTone.badgeBackground(): Color = when (this) {
-    RiskTone.SAFE -> GreenTint
-    RiskTone.LOW -> SurfaceSunken
-    RiskTone.MODERATE -> GoldTint
-    RiskTone.HIGH -> RedTint
-    RiskTone.VERY_HIGH -> Red
-    RiskTone.UNKNOWN -> SurfaceSunken
-}
-
-private fun RiskTone.badgeText(): Color = when (this) {
-    RiskTone.SAFE -> Green
-    RiskTone.LOW -> Ink
-    RiskTone.MODERATE -> Ink
-    RiskTone.HIGH -> Red
-    RiskTone.VERY_HIGH -> White
-    RiskTone.UNKNOWN -> InkMuted
-}
-
-/** "MODERATE RISK" in the colour of the backend's risk band. */
+/**
+ * The one tag shape for every risk and status label: a dot and words on a
+ * tint. Words always carry the meaning; colour only reinforces it.
+ */
 @Composable
-fun RiskBadge(method: Method, risk: String?, modifier: Modifier = Modifier) {
-    val tone = riskTone(method, risk)
-    val text = if (tone == RiskTone.UNKNOWN) "Not measured" else "${riskName(risk)} risk"
+fun Tag(
+    text: String,
+    dot: Color,
+    modifier: Modifier = Modifier,
+    background: Color = SurfaceSunken,
+    textColor: Color = Ink,
+    hollow: Boolean = false
+) {
     Row(
         modifier = modifier
-            .background(tone.badgeBackground(), Radius.sharp)
-            .padding(horizontal = Space.xs, vertical = 5.dp),
+            .background(background, Radius.small)
+            .padding(horizontal = Space.xs, vertical = Space.xxs),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        KeySquare(if (tone == RiskTone.VERY_HIGH) White else tone.color(), size = 6.dp)
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .then(
+                    if (hollow) Modifier.border(Border.hairline, InkMuted, CircleShape)
+                    else Modifier.background(dot)
+                )
+        )
         Spacer(Modifier.width(6.dp))
-        Text(text.uppercase(), style = VxType.label, color = tone.badgeText())
+        Text(text, style = VxType.label, color = textColor, maxLines = 1)
     }
 }
 
-/** Component severity reported by the backend, as a key square and word. */
+private class TagColors(val dot: Color, val background: Color, val text: Color)
+
+/** Low and moderate stay neutral; tints appear only for high and very high. */
+private fun RiskLevel?.tagColors(): TagColors = when (this) {
+    RiskLevel.LOW -> TagColors(InkMuted, SurfaceSunken, Ink)
+    RiskLevel.MODERATE -> TagColors(Gold, SurfaceSunken, Ink)
+    RiskLevel.HIGH -> TagColors(Red, RedTint, RedInk)
+    RiskLevel.VERY_HIGH -> TagColors(VeryHighRed, RedTint, RedInk)
+    null -> TagColors(InkMuted, SurfaceSunken, InkMuted)
+}
+
+/** "Moderate risk": the overall or per-method risk level, everywhere it is shown. */
+@Composable
+fun RiskTag(level: RiskLevel?, modifier: Modifier = Modifier) {
+    val colors = level.tagColors()
+    Tag(
+        text = level?.let { "${it.label} risk" } ?: "Not measured",
+        dot = colors.dot,
+        background = colors.background,
+        textColor = colors.text,
+        hollow = level == null,
+        modifier = modifier
+    )
+}
+
+/** A backend method risk band as a tag. REBA's "negligible" keeps its own word. */
+@Composable
+fun RiskBadge(method: Method, risk: String?, modifier: Modifier = Modifier) {
+    val level = InterpretationRules.level(method, risk)
+    val colors = level.tagColors()
+    Tag(
+        text = if (level == null) "Not measured" else "${riskName(risk)} risk",
+        dot = colors.dot,
+        background = colors.background,
+        textColor = colors.text,
+        hollow = level == null,
+        modifier = modifier
+    )
+}
+
+/** Component severity reported by the backend, as a dot and word. */
 @Composable
 fun SeverityText(severity: Severity?, modifier: Modifier = Modifier) {
-    val (label, color) = when (severity) {
-        Severity.OK -> "OK" to InkSecondary
-        Severity.MODERATE -> "Moderate" to Gold
-        Severity.HIGH -> "High" to Red
-        null -> "Not measured" to InkMuted
-    }
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        KeySquare(if (severity == null) HairlineStrong else color, size = 6.dp)
-        Spacer(Modifier.width(6.dp))
-        Text(
-            text = label,
-            style = VxType.bodySmall,
-            color = if (severity == Severity.HIGH) Red else if (severity == null) InkMuted else Ink
-        )
+    when (severity) {
+        Severity.OK -> Tag("OK", InkMuted, modifier)
+        Severity.MODERATE -> Tag("Moderate", Gold, modifier)
+        Severity.HIGH -> Tag("High", Red, modifier, background = RedTint, textColor = RedInk)
+        null -> Tag("Not measured", InkMuted, modifier, textColor = InkMuted, hollow = true)
     }
 }
 

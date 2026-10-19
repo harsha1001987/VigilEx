@@ -18,7 +18,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.extrive.vigilex.data.api.ApiResult
+import com.extrive.vigilex.data.insight.overallRisk
+import com.extrive.vigilex.data.model.AssessmentRecord
+import com.extrive.vigilex.ui.components.ArrowLink
+import com.extrive.vigilex.ui.components.SettingsGroup
+import com.extrive.vigilex.ui.components.SettingsRow
+import com.extrive.vigilex.ui.components.VxCard
+import com.extrive.vigilex.ui.format.formatRelativeDateTime
 import com.extrive.vigilex.data.model.Method
 import com.extrive.vigilex.data.model.ReportData
 import com.extrive.vigilex.data.model.TrendPoint
@@ -30,7 +40,6 @@ import com.extrive.vigilex.ui.components.CellText
 import com.extrive.vigilex.ui.components.DataTable
 import com.extrive.vigilex.ui.components.EmptyState
 import com.extrive.vigilex.ui.components.GridRows
-import com.extrive.vigilex.ui.components.Hairline
 import com.extrive.vigilex.ui.components.LoadingState
 import com.extrive.vigilex.ui.components.LocalWindowClass
 import com.extrive.vigilex.ui.components.PageContainer
@@ -52,40 +61,83 @@ import com.extrive.vigilex.ui.theme.Space
 import com.extrive.vigilex.ui.theme.VxType
 
 @Composable
-fun ReportsScreen(onStartAssessment: () -> Unit) {
+fun ReportsScreen(onStartAssessment: () -> Unit, onOpenReport: (String) -> Unit) {
     val repository = remember { AssessmentRepository() }
     val revision by AssessmentStore.revision.collectAsState()
     var attempt by remember { mutableIntStateOf(0) }
-    // null while loading; a null report inside Success means there are no assessments.
-    var state by remember { mutableStateOf<ApiResult<ReportData?>?>(null) }
+    // null while loading; an empty list means there are no assessments.
+    var state by remember { mutableStateOf<ApiResult<List<AssessmentRecord>>?>(null) }
     LaunchedEffect(revision, attempt) {
         if (state !is ApiResult.Success) state = null
-        state = when (val records = repository.allCompleted()) {
-            is ApiResult.Success -> ApiResult.Success(buildReport(records.data))
-            is ApiResult.Error -> records
-        }
+        state = repository.allCompleted()
     }
     val current = state
-    val report = (current as? ApiResult.Success)?.data
+    val records = (current as? ApiResult.Success)?.data
+    val report = remember(records) { records?.let(::buildReport) }
 
     PageContainer {
         PageHeader(
-            eyebrow = "Reports",
-            title = "Ergonomic reports",
-            supporting = "Aggregated from the assessments saved on the VigilEx server."
+            title = "Reports",
+            supporting = "PDF reports for single assessments, and trends across all of them."
         )
         when {
-            current == null -> LoadingState()
+            current == null -> LoadingState(label = "Loading reports…")
             current is ApiResult.Error -> BackendErrorState(current, onRetry = { attempt++ })
-            report == null -> EmptyState(
-                title = "No report data yet",
-                body = "Complete assessments to begin building your ergonomic reports. " +
+            report == null || records == null -> EmptyState(
+                title = "No reports yet",
+                body = "Each completed assessment can be turned into a PDF report. " +
                     "Score trends appear after two or more assessments.",
                 actionLabel = "Start assessment",
                 onAction = onStartAssessment
             )
-            else -> ReportContent(report)
+            else -> {
+                AssessmentReports(records, onOpenReport)
+                Spacer(Modifier.height(Space.xl))
+                ReportContent(report)
+            }
         }
+    }
+}
+
+/** Number of assessments listed before "Show all". */
+private const val REPORT_LIST_COUNT = 5
+
+/**
+ * One row per assessment leading to its report screen, which shows the PDF
+ * when the server already has one and otherwise offers to generate it.
+ * Report availability is only known per assessment, so no status is guessed here.
+ */
+@Composable
+private fun AssessmentReports(records: List<AssessmentRecord>, onOpenReport: (String) -> Unit) {
+    var showAll by rememberSaveable { mutableStateOf(false) }
+    SectionLabel("Assessment reports")
+    Text(
+        "Open an assessment to view its PDF, or generate one if it has none yet.",
+        style = VxType.bodySmall,
+        color = InkMuted
+    )
+    Spacer(Modifier.height(Space.sm))
+    SettingsGroup {
+        val shown = if (showAll) records else records.take(REPORT_LIST_COUNT)
+        shown.forEachIndexed { i, record ->
+            SettingsRow(
+                label = record.fileName,
+                supporting = listOfNotNull(
+                    formatRelativeDateTime(record.createdAtMillis),
+                    record.overallRisk()?.let { "${it.label} risk" }
+                ).joinToString(" · "),
+                icon = Icons.Outlined.Description,
+                divider = i < shown.lastIndex,
+                onClick = { onOpenReport(record.id) }
+            )
+        }
+    }
+    if (records.size > REPORT_LIST_COUNT) {
+        ArrowLink(
+            if (showAll) "Show fewer" else "Show all ${records.size}",
+            onClick = { showAll = !showAll },
+            showArrow = false
+        )
     }
 }
 
@@ -101,16 +153,17 @@ private fun ReportContent(report: ReportData) {
         "Period" to if (trend.size > 1) "${formatShortDate(trend.first().createdAtMillis)} – ${formatShortDate(trend.last().createdAtMillis)}"
         else formatShortDate(trend.first().createdAtMillis)
     )
-    GridRows(figures, if (compact) 2 else 4, verticalGap = Space.lg) { (label, value) ->
-        Column {
-            Hairline()
-            Spacer(Modifier.height(Space.sm))
-            Text(label.uppercase(), style = VxType.label, color = InkMuted)
-            Spacer(Modifier.height(Space.xs))
-            Text(value, style = VxType.metricSmall, color = Ink)
+    SectionLabel("Across all assessments")
+    VxCard {
+        GridRows(figures, if (compact) 2 else 4, verticalGap = Space.md) { (label, value) ->
+            Column {
+                Text(label, style = VxType.bodySmall, color = InkMuted)
+                Spacer(Modifier.height(Space.xxs))
+                Text(value, style = VxType.metricSmall, color = Ink)
+            }
         }
     }
-    Spacer(Modifier.height(Space.xxl))
+    Spacer(Modifier.height(Space.xl))
 
     SectionLabel("Peak score trend")
     if (report.hasTrend) {
@@ -132,7 +185,7 @@ private fun ReportContent(report: ReportData) {
             color = InkSecondary
         )
     }
-    Spacer(Modifier.height(Space.xxl))
+    Spacer(Modifier.height(Space.xl))
 
     SectionLabel("Peak risk across assessments")
     val rula = report.peakRiskCounts[Method.RULA].orEmpty().toMap()
@@ -149,7 +202,7 @@ private fun ReportContent(report: ReportData) {
     }
     Spacer(Modifier.height(Space.sm))
     Text("Each assessment counted once, by the risk band of its peak score.", style = VxType.bodySmall, color = InkMuted)
-    Spacer(Modifier.height(Space.xxl))
+    Spacer(Modifier.height(Space.xl))
 
     SectionLabel("Posture metrics across assessments")
     DataTable(
@@ -177,7 +230,7 @@ private fun TrendBlock(method: Method, trend: List<TrendPoint>, modifier: Modifi
     Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(method.label, style = VxType.title, color = Ink, modifier = Modifier.weight(1f))
-            Text("Scale 0–${method.scaleMax}", style = VxType.mono, color = InkMuted)
+            Text("Scale 0–${method.scaleMax}", style = VxType.label, color = InkMuted)
         }
         Spacer(Modifier.height(Space.sm))
         TrendChart(values = values, scaleMax = method.scaleMax)

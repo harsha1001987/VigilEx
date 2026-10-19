@@ -6,8 +6,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.navigation.NavBackStackEntry
@@ -110,6 +110,7 @@ fun VigilExNavGraph(navController: NavHostController) {
     }
 
     val openDetail = { id: String -> navController.navigate(Routes.detail(id)) }
+    val openReport = { id: String -> navController.navigate(Routes.report(id)) { launchSingleTop = true } }
     val startAssessment = { navController.navigateTopLevel(TopLevel.ASSESSMENT) }
     val openProfile = { navController.navigate(Routes.PROFILE) { launchSingleTop = true } }
     val openSignIn = { navController.navigate(Routes.SIGN_IN) { launchSingleTop = true } }
@@ -151,13 +152,17 @@ fun VigilExNavGraph(navController: NavHostController) {
                     )
                 }
                 screen(TopLevel.ASSESSMENT.route) {
-                    AssessmentStudioScreen(onOpenDiagnostic = openDetail, onOpenDeveloperOptions = openDeveloper)
+                    AssessmentStudioScreen(
+                        onOpenResult = { id -> navController.navigate(Routes.detail(id)) { launchSingleTop = true } },
+                        onOpenHistory = { navController.navigateTopLevel(TopLevel.HISTORY) },
+                        onOpenDeveloperOptions = openDeveloper
+                    )
                 }
                 screen(TopLevel.HISTORY.route) {
                     HistoryScreen(onOpenAssessment = openDetail, onStartAssessment = startAssessment)
                 }
                 screen(TopLevel.REPORTS.route) {
-                    ReportsScreen(onStartAssessment = startAssessment)
+                    ReportsScreen(onStartAssessment = startAssessment, onOpenReport = openReport)
                 }
 
                 // ---- Assessment detail and its report
@@ -170,7 +175,7 @@ fun VigilExNavGraph(navController: NavHostController) {
                     AssessmentDetailScreen(
                         id = id,
                         onBack = { navController.back { navController.navigateTopLevel(TopLevel.HISTORY) } },
-                        onGenerateReport = { navController.navigate(Routes.report(id)) { launchSingleTop = true } }
+                        onGenerateReport = { openReport(id) }
                     )
                 }
                 composable(

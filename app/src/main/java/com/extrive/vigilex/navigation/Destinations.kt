@@ -1,20 +1,20 @@
 package com.extrive.vigilex.navigation
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.Dashboard
-import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.Videocam
+import androidx.compose.material.icons.outlined.CenterFocusWeak
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.ui.graphics.vector.ImageVector
 
 const val DEEP_LINK_BASE = "vigilex://app"
 
 /** The four primary sections. Order is the order shown in navigation. */
 enum class TopLevel(val route: String, val label: String, val icon: ImageVector) {
-    OVERVIEW("overview", "Overview", Icons.Outlined.Dashboard),
-    ASSESSMENT("assessment", "Assessment", Icons.Outlined.Videocam),
-    HISTORY("history", "History", Icons.Outlined.History),
-    REPORTS("reports", "Reports", Icons.Outlined.BarChart)
+    OVERVIEW("overview", "Overview", Icons.Outlined.GridView),
+    ASSESSMENT("assessment", "Assessment", Icons.Outlined.CenterFocusWeak),
+    HISTORY("history", "History", Icons.Outlined.Schedule),
+    REPORTS("reports", "Reports", Icons.Outlined.Description)
 }
 
 object Routes {

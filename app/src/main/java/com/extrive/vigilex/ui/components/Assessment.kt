@@ -1,6 +1,11 @@
 package com.extrive.vigilex.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import com.extrive.vigilex.ui.theme.RedInk
+import com.extrive.vigilex.ui.theme.RedTint
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +25,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.extrive.vigilex.data.insight.ComponentScore
@@ -30,20 +34,14 @@ import com.extrive.vigilex.data.insight.RegionFinding
 import com.extrive.vigilex.data.insight.RegionStatus
 import com.extrive.vigilex.data.insight.RiskLevel
 import com.extrive.vigilex.data.model.BodyMetric
-import com.extrive.vigilex.data.model.Method
 import com.extrive.vigilex.data.model.Severity
 import com.extrive.vigilex.data.model.riskName
 import com.extrive.vigilex.ui.format.EMPTY_VALUE
 import com.extrive.vigilex.ui.format.formatDegrees
-import com.extrive.vigilex.ui.format.formatDegreesNumber
-import com.extrive.vigilex.ui.format.formatScale
-import com.extrive.vigilex.ui.format.formatScore
-import com.extrive.vigilex.ui.theme.Charcoal
 import com.extrive.vigilex.ui.theme.Gold
 import com.extrive.vigilex.ui.theme.GoldInk
 import com.extrive.vigilex.ui.theme.HairlineStrong
 import com.extrive.vigilex.ui.theme.Ink
-import com.extrive.vigilex.ui.theme.InkFaint
 import com.extrive.vigilex.ui.theme.InkMuted
 import com.extrive.vigilex.ui.theme.InkSecondary
 import com.extrive.vigilex.ui.theme.Red
@@ -61,7 +59,7 @@ import com.extrive.vigilex.ui.theme.VxType
 
 /** Accent rule / marker colour for an overall risk level. */
 fun RiskLevel?.accent(): Color = when (this) {
-    RiskLevel.LOW -> Charcoal
+    RiskLevel.LOW -> InkMuted
     RiskLevel.MODERATE -> Gold
     RiskLevel.HIGH -> Red
     RiskLevel.VERY_HIGH -> VeryHighRed
@@ -72,7 +70,7 @@ fun RiskLevel?.accent(): Color = when (this) {
 fun RiskLevel?.headlineColor(): Color = when (this) {
     RiskLevel.HIGH -> Red
     RiskLevel.VERY_HIGH -> VeryHighRed
-    null -> InkFaint
+    null -> InkMuted
     else -> Ink
 }
 
@@ -90,65 +88,62 @@ fun RegionStatus.textColor(): Color = when (this) {
     RegionStatus.HIGH -> Red
 }
 
-val RiskLevel?.headlineText: String get() = this?.label?.uppercase() ?: "NOT MEASURED"
+val RiskLevel?.headlineText: String get() = this?.let { "${it.label} risk" } ?: "Not measured"
 
 // ------------------------------------------------------------- conclusion
 
 /**
- * ERGONOMIC RISK / MODERATE / RULA and REBA as supporting evidence, then the
- * generated observation. The one block every assessment view starts with.
+ * Overall risk in words, what it means, then RULA and REBA as its evidence.
+ * The one block every assessment view starts with.
  */
 @Composable
 fun RiskConclusion(
     interpretation: Interpretation,
     modifier: Modifier = Modifier,
-    eyebrow: String = "Ergonomic risk",
+    eyebrow: String = "Overall posture risk",
     showGuidance: Boolean = true
 ) {
     val compact = LocalWindowClass.current == WindowClass.COMPACT
     val level = interpretation.overall
-    Column(modifier.fillMaxWidth()) {
-        Text(eyebrow.uppercase(), style = VxType.label, color = InkMuted)
-        Spacer(Modifier.height(Space.sm))
-        Text(
-            level.headlineText,
-            style = if (compact) VxType.riskHeadlineCompact else VxType.riskHeadline,
-            color = level.headlineColor(),
-            modifier = Modifier.semantics {
-                heading()
-                contentDescription = "Ergonomic risk: ${level?.label ?: "not measured"}"
-            }
-        )
-        Spacer(Modifier.height(Space.md))
-        // A short accent bar over the full rule: the level's signal colour, used once.
-        Box(
-            Modifier
-                .width(56.dp)
-                .height(4.dp)
-                .background(level.accent())
-        )
-        Hairline(color = Ink)
-        MethodLine(interpretation.rula)
-        Hairline()
-        MethodLine(interpretation.reba)
-        Hairline()
-        interpretation.observation?.let {
-            Spacer(Modifier.height(Space.lg))
+    VxCard(modifier) {
+        Text(eyebrow, style = VxType.label, color = InkMuted)
+        Spacer(Modifier.height(Space.xs))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(12.dp)
+                    .clip(CircleShape)
+                    .background(level.accent())
+            )
+            Spacer(Modifier.width(Space.sm))
             Text(
-                it,
-                style = if (compact) VxType.body else VxType.sectionTitle.copy(fontWeight = FontWeight.Normal),
-                color = Ink,
-                modifier = Modifier.widthIn(max = 620.dp)
+                level.headlineText,
+                style = if (compact) VxType.riskHeadlineCompact else VxType.riskHeadline,
+                color = level.headlineColor(),
+                modifier = Modifier.semantics {
+                    heading()
+                    contentDescription = "Overall posture risk: ${level?.label ?: "not measured"}"
+                }
             )
         }
         if (showGuidance) interpretation.guidance?.let {
             Spacer(Modifier.height(Space.xs))
-            Text(it, style = VxType.bodySmall, color = InkSecondary)
+            Text(it, style = VxType.body, color = InkSecondary)
+        }
+        Spacer(Modifier.height(Space.md))
+        Hairline()
+        MethodLine(interpretation.rula)
+        Hairline()
+        MethodLine(interpretation.reba)
+        interpretation.observation?.let {
+            Hairline()
+            Spacer(Modifier.height(Space.sm))
+            Text(it, style = VxType.body, color = Ink, modifier = Modifier.widthIn(max = 620.dp))
         }
     }
 }
 
-/** RULA   04 / 07   ■ Moderate */
+/** RULA peak score  4 / 7  [Moderate risk] */
 @Composable
 fun MethodLine(result: MethodResult, modifier: Modifier = Modifier) {
     val method = result.method
@@ -157,20 +152,24 @@ fun MethodLine(result: MethodResult, modifier: Modifier = Modifier) {
             .fillMaxWidth()
             .padding(vertical = Space.sm)
             .clearAndSetSemantics {
-                contentDescription = if (result.score == null) "${method.label} not measured"
-                else "${method.label} ${result.score} of ${method.scaleMax}, ${riskName(result.risk)}"
+                contentDescription = if (result.score == null) "${method.label} peak score not measured"
+                else "${method.label} peak score ${result.score} of ${method.scaleMax}, ${riskName(result.risk)} risk"
             },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(method.label, style = VxType.label, color = InkMuted, modifier = Modifier.width(64.dp))
-        Text(formatScore(result.score), style = VxType.metricSmall, color = if (result.score == null) InkFaint else Ink)
-        Text(" / ${formatScale(method.scaleMax)}", style = VxType.mono, color = InkMuted)
-        Spacer(Modifier.weight(1f))
-        if (result.score != null) {
-            KeySquare(result.level.accent(), size = 8.dp)
-            Spacer(Modifier.width(Space.xs))
+        Column(Modifier.weight(1f)) {
+            Text("${method.label} peak score", style = VxType.bodySmall, color = InkSecondary)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(result.score?.toString() ?: EMPTY_VALUE, style = VxType.metricSmall, color = if (result.score == null) InkMuted else Ink)
+                Text(
+                    " / ${method.scaleMax}",
+                    style = VxType.bodySmall,
+                    color = InkMuted,
+                    modifier = Modifier.padding(bottom = 2.dp)
+                )
+            }
         }
-        Text(riskName(result.risk), style = VxType.bodySmall, color = InkSecondary)
+        RiskBadge(method, result.risk)
     }
 }
 
@@ -178,97 +177,48 @@ fun MethodLine(result: MethodResult, modifier: Modifier = Modifier) {
 
 @Composable
 fun StatusTag(status: RegionStatus, modifier: Modifier = Modifier) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        KeySquare(status.marker(), size = 7.dp)
-        Spacer(Modifier.width(6.dp))
-        Text(
-            status.label.uppercase(),
-            style = VxType.label.copy(fontWeight = if (status >= RegionStatus.ELEVATED) FontWeight.Bold else FontWeight.SemiBold),
-            color = status.textColor()
-        )
+    when (status) {
+        RegionStatus.HIGH -> Tag(status.label, Red, modifier, background = RedTint, textColor = RedInk)
+        RegionStatus.ELEVATED, RegionStatus.ATTENTION -> Tag(status.label, Gold, modifier)
+        RegionStatus.LOW -> Tag(status.label, InkMuted, modifier)
+        RegionStatus.NOT_MEASURED -> Tag(status.label, InkMuted, modifier, textColor = InkMuted, hollow = true)
     }
 }
 
 /**
- * Editorial treatment of the most significant finding: a large peak figure,
- * a small label, one statement, one line of evidence.
+ * One finding, in the same layout for every finding: what was observed and
+ * its status, the body region with its measured angles, then one sentence
+ * from the interpretation of this assessment's own frames.
  */
 @Composable
-fun KeyFinding(finding: RegionFinding, modifier: Modifier = Modifier, number: Int = 1) {
-    Column(modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text("KEY FINDING", style = VxType.label, color = Ink, modifier = Modifier.weight(1f))
-            Text("%02d".format(number), style = VxType.mono, color = InkMuted)
-        }
-        Spacer(Modifier.height(Space.xs))
-        Hairline(color = Ink)
-        Spacer(Modifier.height(Space.md))
-        Text(finding.metric.label.uppercase(), style = VxType.label, color = InkMuted)
-        Spacer(Modifier.height(Space.xs))
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                finding.maximum?.let { formatDegreesNumber(it) + "°" } ?: EMPTY_VALUE,
-                style = VxType.figure,
-                color = Ink
-            )
+fun FindingCard(finding: RegionFinding, modifier: Modifier = Modifier) {
+    VxCard(modifier.semantics(mergeDescendants = true) {}) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(finding.title, style = VxType.title, color = Ink, modifier = Modifier.weight(1f))
             Spacer(Modifier.width(Space.sm))
-            Text("PEAK", style = VxType.label, color = InkMuted, modifier = Modifier.padding(bottom = 10.dp))
-            finding.average?.let {
-                Spacer(Modifier.width(Space.md))
-                Text(
-                    "${formatDegrees(it)} AVG",
-                    style = VxType.mono,
-                    color = InkMuted,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
+            StatusTag(finding.status)
         }
-        Spacer(Modifier.height(Space.sm))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            KeySquare(finding.status.marker(), size = 8.dp)
-            Spacer(Modifier.width(Space.xs))
-            Text(
-                "${finding.title} observed".uppercase(),
-                style = VxType.labelLarge,
-                color = finding.status.textColor().takeIf { finding.status.flagged } ?: Ink
-            )
-        }
+        Spacer(Modifier.height(Space.xxs))
+        Text(
+            listOfNotNull(
+                finding.metric.label,
+                finding.maximum?.let { "peak ${formatDegrees(it)}" },
+                finding.average?.let { "average ${formatDegrees(it)}" }
+            ).joinToString(" · "),
+            style = VxType.bodySmall,
+            color = InkSecondary
+        )
         Spacer(Modifier.height(Space.xs))
-        Text(finding.detail, style = VxType.bodySmall, color = InkSecondary)
+        Text(finding.detail, style = VxType.bodySmall, color = InkMuted)
     }
 }
 
-/** 02  Pronounced neck flexion ........ ELEVATED */
-@Composable
-fun FindingRow(number: Int, finding: RegionFinding, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth()) {
-        Row(Modifier.padding(vertical = Space.md), verticalAlignment = Alignment.Top) {
-            Text("%02d".format(number), style = VxType.mono, color = InkMuted, modifier = Modifier.width(40.dp))
-            Column(Modifier.weight(1f)) {
-                Text(finding.title, style = VxType.title, color = Ink)
-                Spacer(Modifier.height(2.dp))
-                Text(finding.detail, style = VxType.bodySmall, color = InkSecondary)
-            }
-            Spacer(Modifier.width(Space.md))
-            StatusTag(finding.status, Modifier.padding(top = 4.dp))
-        }
-        Hairline()
-    }
-}
-
-/** WHAT WE FOUND: the key finding featured, the rest as numbered rows. */
+/** Key findings in the order the interpretation ranks them; nothing is drawn when there are none. */
 @Composable
 fun WhatWeFound(findings: List<RegionFinding>, modifier: Modifier = Modifier) {
     if (findings.isEmpty()) return
-    Column(modifier.fillMaxWidth()) {
-        KeyFinding(findings.first())
-        if (findings.size > 1) {
-            Spacer(Modifier.height(Space.xl))
-            Text("ALSO FOUND", style = VxType.label, color = InkMuted)
-            Spacer(Modifier.height(Space.xs))
-            Hairline(color = Ink)
-            findings.drop(1).forEachIndexed { i, finding -> FindingRow(i + 2, finding) }
-        }
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        findings.forEach { FindingCard(it) }
     }
 }
 
@@ -286,7 +236,7 @@ fun WhyThisResult(
     val compact = LocalWindowClass.current == WindowClass.COMPACT
     Column(modifier.fillMaxWidth()) {
         if (compact) {
-            Hairline(color = Ink)
+            Hairline()
             regions.forEach { region ->
                 Row(
                     Modifier
@@ -294,14 +244,12 @@ fun WhyThisResult(
                         .padding(vertical = Space.md),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(region.metric.label.uppercase(), style = VxType.label, color = Ink, modifier = Modifier.weight(1f))
-                    Text(
-                        formatDegrees(region.maximum),
-                        style = VxType.metricSmall,
-                        color = if (region.status.flagged) Ink else InkSecondary
-                    )
-                    Text(" MAX", style = VxType.label, color = InkMuted)
-                    Box(Modifier.width(112.dp), contentAlignment = Alignment.CenterEnd) { StatusTag(region.status) }
+                    Column(Modifier.weight(1f)) {
+                        Text(region.metric.label, style = VxType.title, color = Ink)
+                        Text("Peak ${formatDegrees(region.maximum)}", style = VxType.bodySmall, color = InkSecondary)
+                    }
+                    Spacer(Modifier.width(Space.sm))
+                    StatusTag(region.status)
                 }
                 Hairline()
             }
@@ -315,12 +263,12 @@ fun WhyThisResult(
                             .background(if (region.status.flagged) Ink else HairlineStrong)
                     )
                     Spacer(Modifier.height(Space.sm))
-                    Text(region.metric.label.uppercase(), style = VxType.label, color = Ink)
-                    Spacer(Modifier.height(Space.md))
+                    Text(region.metric.label, style = VxType.title, color = Ink)
+                    Spacer(Modifier.height(Space.sm))
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(formatDegrees(region.maximum), style = VxType.metric, color = if (region.status.flagged) Ink else InkSecondary)
                         Spacer(Modifier.width(Space.xs))
-                        Text("MAX", style = VxType.label, color = InkMuted, modifier = Modifier.padding(bottom = 6.dp))
+                        Text("peak", style = VxType.label, color = InkMuted, modifier = Modifier.padding(bottom = 6.dp))
                     }
                     Spacer(Modifier.height(Space.sm))
                     StatusTag(region.status)
@@ -374,14 +322,13 @@ fun MethodBreakdown(result: MethodResult, peakTimeLabel: String?, modifier: Modi
     Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.Bottom) {
             Text(method.label, style = VxType.sectionTitle, color = Ink, modifier = Modifier.weight(1f))
-            Text(formatScore(result.score), style = VxType.metric, color = Ink)
-            Text(" / ${formatScale(method.scaleMax)}", style = VxType.mono, color = InkMuted, modifier = Modifier.padding(bottom = 6.dp))
+            Text(result.score?.toString() ?: EMPTY_VALUE, style = VxType.metric, color = Ink)
+            Text(" / ${method.scaleMax}", style = VxType.bodySmall, color = InkMuted, modifier = Modifier.padding(bottom = 6.dp))
         }
+        Text("Peak score", style = VxType.label, color = InkMuted)
         Spacer(Modifier.height(Space.xs))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            KeySquare(result.level.accent(), size = 8.dp)
-            Spacer(Modifier.width(Space.xs))
-            Text("${riskName(result.risk)} risk".uppercase(), style = VxType.label, color = Ink)
+            RiskBadge(method, result.risk)
             Spacer(Modifier.weight(1f))
             Text("${result.framesScored} frames scored", style = VxType.mono, color = InkMuted)
         }

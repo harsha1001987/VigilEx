@@ -21,6 +21,8 @@ from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     CondPageBreak,
     Flowable,
@@ -29,7 +31,6 @@ from reportlab.platypus import (
     SimpleDocTemplate,
     Spacer,
     Table,
-    TableStyle,
 )
 
 from app.core.config import get_settings
@@ -267,7 +268,7 @@ def evidence_frames(
             return None
         for i, f in enumerate(keyframes):
             if _frame_score(f, method) == r.score:
-                return i, f"Peak {method} {r.score:02d} / {r.scale_max:02d}"
+                return i, f"Peak {method} {r.score} / {r.scale_max}"
         return None
 
     key = None
@@ -339,46 +340,152 @@ def stored_report(assessment: Assessment) -> Path | None:
 
 
 # ------------------------------------------------------------ PDF
+#
+# Layout rules: every variable text is a wrapping Paragraph (never a bare
+# table string), tables repeat their header row on a new page, a heading is
+# always kept with the block it introduces, and nothing is drawn outside the
+# frame. Colour is never the only signal: every status and risk is in words.
 
-INK = colors.HexColor("#0A0A0A")
-SECONDARY = colors.HexColor("#55554F")
-MUTED = colors.HexColor("#8C8C85")
-HAIRLINE = colors.HexColor("#E2E2DC")
-SUNKEN = colors.HexColor("#EDEDE8")
-GOLD = colors.HexColor("#C9A227")
-GOLD_INK = colors.HexColor("#7A5F00")
-RED = colors.HexColor("#C62828")
-NOTICE = colors.HexColor("#FBF5E0")
-PRODUCT_TINT = colors.HexColor("#F4F4EF")
+INK = colors.HexColor("#171717")
+SECONDARY = colors.HexColor("#45453F")
+MUTED = colors.HexColor("#6E6E68")
+HAIRLINE = colors.HexColor("#E4E3DD")
+SUNKEN = colors.HexColor("#F3F2EE")
+YELLOW = colors.HexColor("#F4C928")
+GOLD = colors.HexColor("#B68A2C")
+GOLD_INK = colors.HexColor("#7A5C14")
+RED = colors.HexColor("#C93636")
+RED_INK = colors.HexColor("#A82A2A")
+NOTICE = colors.HexColor("#FBF6E6")
 
-_ACCENT = {"low": colors.HexColor("#171717"), "moderate": GOLD, "high": RED, "very_high": colors.HexColor("#8E1B1B")}
-_STATUS_COLOR = {"Low": MUTED, "Not measured": MUTED, "Attention": INK, "Elevated": GOLD_INK, "High": RED}
+_RISK_COLOR = {"low": INK, "moderate": GOLD_INK, "high": RED_INK, "very_high": RED_INK}
+_RISK_ACCENT = {"low": MUTED, "moderate": GOLD, "high": RED, "very_high": RED}
+_STATUS_COLOR = {"Low": MUTED, "Not measured": MUTED, "Attention": INK, "Elevated": GOLD_INK, "High": RED_INK}
+_AREA_LABEL = {"back": "Back / trunk", "knees": "Knees", "neck": "Neck", "upper_arm": "Upper arm"}
 
-_label = ParagraphStyle("label", fontName="Helvetica-Bold", fontSize=7.5, leading=10, textColor=MUTED)
-_label_ink = ParagraphStyle("label_ink", parent=_label, textColor=INK)
-_body = ParagraphStyle("body", fontName="Helvetica", fontSize=9.5, leading=13.5, textColor=SECONDARY)
-_body_ink = ParagraphStyle("body_ink", parent=_body, textColor=INK)
-_lead = ParagraphStyle("lead", fontName="Helvetica", fontSize=12.5, leading=17, textColor=INK)
-_title_style = ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=24, leading=28, textColor=INK)
-_section = ParagraphStyle("section", fontName="Helvetica", fontSize=26, leading=28, textColor=INK)
+PAGE_W, PAGE_H = A4
+MARGIN_X = 18 * mm
+MARGIN_TOP = 24 * mm
+MARGIN_BOTTOM = 22 * mm
+REPORT_TITLE = "Ergonomic assessment report"
+
+# allowWidows=0: a paragraph never leaves its last line alone at the top of the next page.
+_body = ParagraphStyle("body", fontName="Helvetica", fontSize=9.5, leading=13.5, textColor=INK, allowWidows=0)
+_body_muted = ParagraphStyle("body_muted", parent=_body, textColor=SECONDARY)
 _small = ParagraphStyle("small", fontName="Helvetica", fontSize=8, leading=11, textColor=MUTED)
-_right = ParagraphStyle("right", parent=_body_ink, alignment=TA_RIGHT)
+_lead = ParagraphStyle("lead", fontName="Helvetica", fontSize=11, leading=15.5, textColor=INK, allowWidows=0)
+_title_style = ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=INK)
+_name_style = ParagraphStyle("name", fontName="Helvetica", fontSize=13, leading=17, textColor=INK)
+_h1 = ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=14, leading=18, textColor=INK)
+_h2 = ParagraphStyle("h2", fontName="Helvetica-Bold", fontSize=10.5, leading=14, textColor=INK)
+_h2_gold = ParagraphStyle("h2_gold", parent=_h2, textColor=GOLD_INK)
+_action = ParagraphStyle("action", fontName="Helvetica-Bold", fontSize=15, leading=19, textColor=INK)
+_meta_label = ParagraphStyle("meta_label", fontName="Helvetica", fontSize=8.5, leading=12, textColor=MUTED)
+_meta_value = ParagraphStyle("meta_value", fontName="Helvetica", fontSize=9.5, leading=12, textColor=INK)
+_th = ParagraphStyle("th", fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=MUTED)
+_th_right = ParagraphStyle("th_right", parent=_th, alignment=TA_RIGHT)
+_td = ParagraphStyle("td", fontName="Helvetica", fontSize=9, leading=12, textColor=INK, allowWidows=0)
+_td_right = ParagraphStyle("td_right", parent=_td, alignment=TA_RIGHT)
+_td_bold = ParagraphStyle("td_bold", parent=_td, fontName="Helvetica-Bold")
+
+
+def _p(text: str | None, style: ParagraphStyle) -> Paragraph:
+    """A wrapping paragraph of plain text (escaped; never interpreted as markup)."""
+    return Paragraph(escape(text or ""), style)
+
+
+def _risk_words(risk: str | None) -> str:
+    return "Not measured" if risk is None else f"{risk.replace('_', ' ').capitalize()} risk"
+
+
+def _status_cell(status: str, align_right: bool = True) -> Paragraph:
+    style = ParagraphStyle(f"status_{status}", parent=_td_right if align_right else _td, textColor=_STATUS_COLOR.get(status, INK))
+    if status in ("Elevated", "High"):
+        style.fontName = "Helvetica-Bold"
+    return Paragraph(escape(status), style)
+
+
+def _fit(text: str, font: str, size: float, max_width: float) -> str:
+    """Shortens [text] with an ellipsis so it fits on one line of [max_width]."""
+    if stringWidth(text, font, size) <= max_width:
+        return text
+    while text and stringWidth(text + "…", font, size) > max_width:
+        text = text[:-1]
+    return text.rstrip() + "…"
 
 
 class _Rule(Flowable):
-    def __init__(self, width: float, weight: float = 0.5, color=HAIRLINE, accent=None):
+    def __init__(self, width: float, weight: float = 0.5, color=HAIRLINE):
         super().__init__()
-        self.width, self.weight, self.color, self.accent = width, weight, color, accent
+        self.width, self.weight, self.color = width, weight, color
 
     def wrap(self, *_):
-        return self.width, self.weight + (3 if self.accent else 0)
+        return self.width, self.weight
 
     def draw(self):
         self.canv.setFillColor(self.color)
         self.canv.rect(0, 0, self.width, self.weight, stroke=0, fill=1)
-        if self.accent is not None:
-            self.canv.setFillColor(self.accent)
-            self.canv.rect(0, self.weight, 40, 3, stroke=0, fill=1)
+
+
+class _RiskMark(Flowable):
+    """A filled dot before the overall risk words; the words carry the meaning."""
+
+    def __init__(self, color, size: float = 9):
+        super().__init__()
+        self.color, self.size = color, size
+
+    def wrap(self, *_):
+        return self.size, self.size
+
+    def draw(self):
+        self.canv.setFillColor(self.color)
+        self.canv.circle(self.size / 2, self.size / 2, self.size / 2, stroke=0, fill=1)
+
+
+def _numbered_canvas(footer_left: str):
+    """A canvas that draws the header and footer once the page count is known ("Page 2 of 5")."""
+
+    class NumberedCanvas(Canvas):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._pages: list[dict] = []
+
+        def showPage(self):
+            self._pages.append(dict(self.__dict__))
+            self._startPage()
+
+        def save(self):
+            total = len(self._pages)
+            for state in self._pages:
+                self.__dict__.update(state)
+                self._chrome(total)
+                super().showPage()
+            super().save()
+
+        def _chrome(self, total: int):
+            self.saveState()
+            top = PAGE_H - 13 * mm
+            self.setFillColor(YELLOW)
+            self.rect(MARGIN_X, top - 0.6 * mm, 3.2 * mm, 3.2 * mm, stroke=0, fill=1)
+            self.setFillColor(INK)
+            self.setFont("Helvetica-Bold", 9.5)
+            self.drawString(MARGIN_X + 5 * mm, top, "VigilEx")
+            self.setFillColor(MUTED)
+            self.setFont("Helvetica", 8)
+            self.drawRightString(PAGE_W - MARGIN_X, top, REPORT_TITLE)
+            self.setStrokeColor(HAIRLINE)
+            self.setLineWidth(0.5)
+            self.line(MARGIN_X, top - 3.5 * mm, PAGE_W - MARGIN_X, top - 3.5 * mm)
+
+            self.line(MARGIN_X, 14 * mm, PAGE_W - MARGIN_X, 14 * mm)
+            page = f"Page {self._pageNumber} of {total}"
+            self.setFont("Helvetica", 8)
+            self.drawRightString(PAGE_W - MARGIN_X, 9.5 * mm, page)
+            room = PAGE_W - 2 * MARGIN_X - stringWidth(page, "Helvetica", 8) - 10 * mm
+            self.drawString(MARGIN_X, 9.5 * mm, _fit(footer_left, "Helvetica", 8, room))
+            self.restoreState()
+
+    return NumberedCanvas
 
 
 _COCO_EDGES = [
@@ -387,13 +494,21 @@ _COCO_EDGES = [
 ]
 
 
-def _pose(frame: dict[str, Any], width: float, fw: int, fh: int) -> Drawing:
-    """The detected pose, drawn from the stored landmarks (the video itself is not kept)."""
+def _pose(frame: dict[str, Any], max_width: float, max_height: float, fw: int, fh: int) -> Drawing:
+    """The detected pose, drawn from the stored landmarks (the video itself is not kept), fitted to the box."""
+    pts = frame.get("landmarks") or []
+    if len(pts) >= 17 and not (fw and fh):
+        # No stored frame size: frame the visible landmarks instead of drawing nothing.
+        seen = [p for p in pts if (p.get("confidence") or 0) >= 0.5]
+        if seen:
+            fw = int(max(p["x"] for p in seen) * 1.15) or 1
+            fh = int(max(p["y"] for p in seen) * 1.1) or 1
     aspect = fw / fh if fw and fh else 16 / 9
-    height = width / aspect
+    width, height = max_width, max_width / aspect
+    if height > max_height:
+        width, height = max_height * aspect, max_height
     d = Drawing(width, height)
     d.add(Rect(0, 0, width, height, fillColor=SUNKEN, strokeColor=None))
-    pts = frame.get("landmarks") or []
     if len(pts) >= 17 and fw and fh:
         def at(i):
             p = pts[i]
@@ -404,16 +519,15 @@ def _pose(frame: dict[str, Any], width: float, fw: int, fh: int) -> Drawing:
         for a, b in _COCO_EDGES:
             p1, p2 = at(a), at(b)
             if p1 and p2:
-                d.add(Line(p1[0], p1[1], p2[0], p2[1], strokeColor=INK, strokeWidth=1.6, strokeLineCap=1))
+                d.add(Line(p1[0], p1[1], p2[0], p2[1], strokeColor=INK, strokeWidth=1.4, strokeLineCap=1))
         for i in range(len(pts)):
             p = at(i)
             if p:
-                d.add(Circle(p[0], p[1], 1.8, fillColor=INK, strokeColor=None))
+                d.add(Circle(p[0], p[1], 1.6, fillColor=INK, strokeColor=None))
     return d
 
 
 _COMPONENT_ORDER = ("upper_arm", "lower_arm", "wrist", "wrist_twist", "neck", "trunk", "legs")
-_AREA_LABEL = {"back": "BACK / TRUNK", "knees": "KNEES", "neck": "NECK", "upper_arm": "UPPER ARM"}
 
 
 def component_table(assessment: Assessment, result: MethodResult | None, method: str) -> ComponentTable | None:
@@ -449,323 +563,362 @@ def component_table(assessment: Assessment, result: MethodResult | None, method:
     return None
 
 
-def _product_block(product: ProductRecommendation, width: float, panel, bullets) -> Table:
+def _product_block(product: ProductRecommendation, panel, bullets) -> Table:
     """The recommended product to evaluate: tied to the finding, then what it is, then how to evaluate it."""
-    head = " · ".join(p for p in (product.maker, product.category) if p).upper()
+    head = " · ".join(p for p in (product.maker, product.category) if p)
     parts: list[Any] = [
-        Paragraph(escape(head), _label),
-        Spacer(1, 4),
-        Paragraph(escape(product.headline), ParagraphStyle("product", fontName="Helvetica-Bold", fontSize=16, leading=20, textColor=INK)),
-        Spacer(1, 8),
-        Paragraph(escape(product.rationale), _body_ink),
+        _p(head, _small),
+        Spacer(1, 3),
+        _p(product.headline, _action),
+        Spacer(1, 6),
+        _p(product.rationale, _body),
         Spacer(1, 10),
     ]
     if product.content_status == "verified":
         parts += [
-            Paragraph("WHY IT MAY HELP", _label_ink),
+            _p("Why it may help", _h2),
             Spacer(1, 3),
-            Paragraph(escape(f"{product.intended_use} {product.operating_principle}"), _body_ink),
+            _p(f"{product.intended_use} {product.operating_principle}", _body),
             Spacer(1, 4),
-            Paragraph(escape("Relevant tasks: " + "; ".join(t[0].lower() + t[1:] for t in product.task_types) + "."), _body),
+            _p("Relevant tasks: " + "; ".join(t[0].lower() + t[1:] for t in product.task_types) + ".", _body_muted),
             Spacer(1, 10),
         ]
     else:
         parts += [
-            Paragraph("PRODUCT INFORMATION PENDING", ParagraphStyle("pending", parent=_label_ink, textColor=GOLD_INK)),
+            _p("Product information pending", _h2_gold),
             Spacer(1, 3),
-            Paragraph(escape(f"Missing approved content: {', '.join(product.content_gaps)}."), _body),
+            _p(f"Missing approved content: {', '.join(product.content_gaps)}.", _body_muted),
             Spacer(1, 10),
         ]
-    parts += [Paragraph("BEST RESULTS COME FROM COMBINING APPROACHES", _label_ink), Spacer(1, 3)]
+    parts += [_p("Best results come from combining approaches", _h2), Spacer(1, 3)]
     parts += bullets(product.complementary_actions)
-    parts += [Spacer(1, 10), Paragraph("BEFORE INTRODUCING IT", _label_ink), Spacer(1, 3)]
+    parts += [Spacer(1, 10), _p("Before introducing it", _h2), Spacer(1, 3)]
     parts += bullets(product.suitability)
     parts += [Spacer(1, 10)]
     if product.evidence_note:
-        parts += [Paragraph(escape(product.evidence_note), _body), Spacer(1, 4)]
-    parts += [Paragraph(escape(product.qualification), _body)]
+        parts += [_p(product.evidence_note, _body_muted), Spacer(1, 4)]
+    parts += [_p(product.qualification, _body_muted)]
     if product.sources:
-        parts += [Spacer(1, 6), Paragraph(escape("Product information: " + "; ".join(product.sources) + "."), _small)]
-    return panel(parts, INK, PRODUCT_TINT)
+        parts += [Spacer(1, 6), _p("Product information: " + "; ".join(product.sources) + ".", _small)]
+    return panel(parts, INK)
 
 
 def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> None:
-    width = A4[0] - 36 * mm
+    width = PAGE_W - 2 * MARGIN_X
+    name = content.video_name or f"Assessment {str(content.assessment_id)[:8]}"
+    analyzed = f"{content.analyzed_at:%d %b %Y · %H:%M} UTC"
     doc = SimpleDocTemplate(
         str(target),
         pagesize=A4,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
-        topMargin=22 * mm,
-        bottomMargin=20 * mm,
-        title="VigilEx ergonomic assessment",
+        leftMargin=MARGIN_X,
+        rightMargin=MARGIN_X,
+        topMargin=MARGIN_TOP,
+        bottomMargin=MARGIN_BOTTOM,
+        title=f"VigilEx {REPORT_TITLE.lower()}",
         author="VigilEx",
         invariant=1,  # Same assessment, same bytes.
     )
 
-    def frame_page(canvas, doc_):
-        canvas.saveState()
-        canvas.setFont("Helvetica-Bold", 8)
-        canvas.setFillColor(INK)
-        canvas.drawString(18 * mm, A4[1] - 13 * mm, "V I G I L E X")
-        canvas.setFont("Helvetica-Bold", 7)
-        canvas.setFillColor(MUTED)
-        canvas.drawRightString(A4[0] - 18 * mm, A4[1] - 13 * mm, "ERGONOMIC ASSESSMENT")
-        canvas.setStrokeColor(HAIRLINE)
-        canvas.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
-        canvas.setFont("Helvetica", 7.5)
-        canvas.drawString(18 * mm, 10 * mm, f"VigilEx · Ergonomic assessment · {content.video_name or content.assessment_id}")
-        canvas.drawRightString(A4[0] - 18 * mm, 10 * mm, f"{doc_.page:02d}")
-        canvas.restoreState()
-
     story: list[Any] = []
-
-    def section(number: int | None, name: str, keep_with_next: float = 60 * mm):
-        """A numbered main section, or the lettered technical appendix when number is None."""
-        story.append(CondPageBreak(keep_with_next))
-        story.append(_Rule(width, 1, INK))
-        story.append(Spacer(1, 6))
-        mark = "A" if number is None else f"{number:02d}"
-        story.append(Table([[Paragraph(mark, _section), Paragraph(name.upper(), _label_ink)]],
-                           colWidths=[22 * mm, width - 22 * mm],
-                           style=[("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
-        story.append(Spacer(1, 10))
-
-    def table(rows, widths, header=True, status_col=None):
-        t = Table(rows, colWidths=[w * width for w in widths])
-        style = [
-            ("FONT", (0, 0), (-1, -1), "Helvetica", 9),
-            ("TEXTCOLOR", (0, 0), (-1, -1), INK),
-            ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ("LINEBELOW", (0, 1), (-1, -1), 0.5, HAIRLINE),
-        ]
-        if header:
-            style += [
-                ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 7),
-                ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
-                ("LINEBELOW", (0, 0), (-1, 0), 0.8, INK),
-            ]
-        if status_col is not None:
-            for i, row in enumerate(rows[1:], start=1):
-                style.append(("TEXTCOLOR", (status_col, i), (status_col, i), _STATUS_COLOR.get(row[status_col], INK)))
-        t.setStyle(TableStyle(style))
-        return t
-
-    def deg(v):
-        return "—" if v is None else f"{v:.1f}°"
-
-    # Title block
-    story.append(Paragraph("Ergonomic assessment", _title_style))
-    story.append(Spacer(1, 8))
-    meta = [
-        ["VIDEO", content.video_name or "—"],
-        ["ANALYZED", f"{content.analyzed_at:%d %b %Y · %H:%M} UTC"],
-        ["DURATION", "—" if content.duration_sec is None else f"{content.duration_sec:.1f} s"],
-        ["ASSESSMENT", str(content.assessment_id)],
-    ]
-    story.append(Table(meta, colWidths=[28 * mm, width - 28 * mm], style=[
-        ("FONT", (0, 0), (0, -1), "Helvetica-Bold", 7), ("TEXTCOLOR", (0, 0), (0, -1), MUTED),
-        ("FONT", (1, 0), (1, -1), "Helvetica", 9), ("LEFTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 1.5), ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5),
-    ]))
-    story.append(Spacer(1, 18))
-
     overall = content.overall_risk
     primary = content.interventions[0] if content.interventions else None
     others = content.interventions[1:]
     product = content.product_recommendations[0] if content.product_recommendations else None
     reliability = content.measurement_reliability
     limited = reliability is not None and reliability.status == "limited"
-    numbers = {name: i for i, name in enumerate(content.sections, start=1)}
 
-    def numbered(name: str, keep_with_next: float = 60 * mm):
-        section(numbers[name], name, keep_with_next)
+    def heading(name_: str, *first: Any, top: float = 20, keep: float | None = None) -> None:
+        """A section heading, kept on the same page as the block it introduces.
 
-    def panel(flowables: list, accent, background=SUNKEN):
-        """A tinted block with an accent bar on the left."""
+        A block that may be long (keep=height) is not moved whole: the heading
+        starts a new page only when less than [keep] is left, then the block flows on.
+        """
+        story.append(Spacer(1, top))
+        head = [_Rule(width, 0.8, INK), Spacer(1, 7), _p(name_, _h1), Spacer(1, 8)]
+        if keep is None:
+            story.append(KeepTogether([*head, *first]))
+        else:
+            story.extend([CondPageBreak(keep), *head, *first])
+
+    def subheading(text: str, *first: Any, style=_h2) -> None:
+        story.append(KeepTogether([_p(text, style), Spacer(1, 4), *first]))
+
+    def table(header: list[str] | None, rows: list[list[Any]], widths: list[float], right_from: int = 1) -> Table:
+        """A data table: wrapping cells, hairline rows, a header that repeats on each page."""
+        data: list[list[Any]] = []
+        if header:
+            data.append([_p(h, _th_right if i >= right_from else _th) for i, h in enumerate(header)])
+        for row in rows:
+            data.append([
+                cell if not isinstance(cell, str) else _p(cell, _td_right if i >= right_from else _td)
+                for i, cell in enumerate(row)
+            ])
+        style = [
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (-1, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.5, HAIRLINE),
+        ]
+        if header:
+            style.append(("LINEBELOW", (0, 0), (-1, 0), 0.8, INK))
+        return Table(data, colWidths=[w * width for w in widths], repeatRows=1 if header else 0,
+                     hAlign="LEFT", style=style)
+
+    def panel(flowables: list, accent, background=SUNKEN) -> Table:
+        """A tinted block with an accent bar on the left.
+
+        One table row per block, so a long panel splits cleanly between blocks
+        (never mid-line, never moved whole leaving its heading behind).
+        """
         return Table(
-            [["", flowables]],
+            # Spacer(0, 0), not "": an empty string cell would give every row a full text line of height.
+            [[Spacer(0, 0), f] for f in flowables],
             colWidths=[3, width - 3],
+            hAlign="LEFT",
             style=[
-                ("BACKGROUND", (0, 0), (0, 0), accent),
-                ("BACKGROUND", (1, 0), (1, 0), background),
+                ("BACKGROUND", (0, 0), (0, -1), accent),
+                ("BACKGROUND", (1, 0), (1, -1), background),
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (0, 0), 0),
-                ("RIGHTPADDING", (0, 0), (0, 0), 0),
-                ("LEFTPADDING", (1, 0), (1, 0), 14),
-                ("RIGHTPADDING", (1, 0), (1, 0), 14),
-                ("TOPPADDING", (1, 0), (1, 0), 12),
-                ("BOTTOMPADDING", (1, 0), (1, 0), 14),
+                ("LEFTPADDING", (0, 0), (0, -1), 0),
+                ("RIGHTPADDING", (0, 0), (0, -1), 0),
+                ("LEFTPADDING", (1, 0), (1, -1), 14),
+                ("RIGHTPADDING", (1, 0), (1, -1), 14),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (1, 0), (1, 0), 11),
+                ("BOTTOMPADDING", (1, -1), (1, -1), 13),
             ],
         )
 
     def bullets(items: list[str]) -> list:
-        return [Paragraph(f"&bull;&nbsp; {escape(t)}", _body_ink) for t in items]
+        style = ParagraphStyle("bullet", parent=_body, leftIndent=10, bulletIndent=0)
+        return [Paragraph(escape(t), style, bulletText="•") for t in items]
 
-    # 01 Overall assessment: how risky, in one glance.
-    numbered("Overall assessment")
-    risk_word = (overall or "not measured").replace("_", " ").upper()
-    risk_color = RED if overall in ("high", "very_high") else INK
-    story.append(Paragraph(risk_word, ParagraphStyle("risk", fontName="Helvetica-Bold", fontSize=38, leading=42, textColor=risk_color)))
-    story.append(Paragraph("ERGONOMIC RISK", ParagraphStyle("risk_sub", parent=_label_ink, fontSize=10, leading=14)))
+    def deg(v):
+        return "—" if v is None else f"{v:.1f}°"
+
+    def score(r: MethodResult | None) -> str:
+        return "—" if r is None or r.score is None else f"{r.score} / {r.scale_max}"
+
+    # ---------------------------------------------------------- title block
+    story.append(_p(REPORT_TITLE, _title_style))
     story.append(Spacer(1, 6))
-    story.append(_Rule(width, 0.8, INK, accent=_ACCENT.get(overall, HAIRLINE)))
-    rows = []
-    for name, r in (("RULA", content.rula), ("REBA", content.reba)):
-        if r is None:
-            rows.append([name, "—", "Not measured"])
-        else:
-            rows.append([name, f"{r.score:02d} / {r.scale_max:02d}", (r.risk or "—").replace("_", " ").capitalize()])
-    story.append(table(rows, [0.2, 0.3, 0.5], header=False))
+    story.append(_p(name, _name_style))
+    story.append(Spacer(1, 10))
+    # Only facts the assessment holds; a missing value is left out, never shown as zero.
+    meta = [("Analyzed", analyzed)]
+    if content.duration_sec is not None:
+        meta.append(("Video duration", f"{content.duration_sec:.1f} s"))
+    meta.append(("Assessment ID", str(content.assessment_id)))
+    story.append(Table(
+        [[_p(k, _meta_label), _p(v, _meta_value)] for k, v in meta],
+        colWidths=[32 * mm, width - 32 * mm],
+        hAlign="LEFT",
+        style=[("LEFTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 1.5),
+               ("BOTTOMPADDING", (0, 0), (-1, -1), 1.5), ("VALIGN", (0, 0), (-1, -1), "TOP")],
+    ))
+
+    # ---------------------------------------------------------- 1 Overall assessment
+    risk_style = ParagraphStyle("risk", fontName="Helvetica-Bold", fontSize=22, leading=26,
+                                textColor=_RISK_COLOR.get(overall, MUTED))
+    risk_line = Table(
+        [[_RiskMark(_RISK_ACCENT.get(overall, HAIRLINE)), _p(_risk_words(overall), risk_style)]],
+        colWidths=[14, width - 14],
+        hAlign="LEFT",
+        style=[("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+               ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("TOPPADDING", (0, 0), (-1, -1), 0),
+               ("BOTTOMPADDING", (0, 0), (-1, -1), 0)],
+    )
+    verdict: list[Any] = [_p("Overall posture risk", _small), Spacer(1, 3), risk_line]
+    if overall in _GUIDANCE:
+        verdict += [Spacer(1, 4), _p(_GUIDANCE[overall], _body_muted)]
+    scores = [
+        [method, score(r), _p("Not measured" if r is None or r.score is None else _risk_words(r.risk), _td_right)]
+        for method, r in (("RULA peak score", content.rula), ("REBA peak score", content.reba))
+    ]
+    left = 0.46
+    summary = Table(
+        [[verdict, table(["Method", "Score", "Risk level"], scores, [0.24, 0.12, 0.18])]],
+        colWidths=[left * width, (1 - left) * width],
+        hAlign="LEFT",
+        style=[("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+               ("RIGHTPADDING", (0, 0), (0, 0), 12), ("RIGHTPADDING", (1, 0), (1, 0), 0),
+               ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0)],
+    )
+    heading("Overall assessment", summary, top=16)
     if content.action_summary:
-        story.append(Spacer(1, 10))
-        story.append(Paragraph(content.action_summary, _lead))
-    if limited:
-        # Near the findings, so no result is read without its limitation.
         story.append(Spacer(1, 12))
-        story.append(panel([
-            Paragraph(reliability.title.upper(), ParagraphStyle("notice", parent=_label_ink, textColor=GOLD_INK)),
+        story.append(_p(content.action_summary, _lead))
+    if limited:
+        # Next to the result, so no result is read without its limitation.
+        story.append(Spacer(1, 12))
+        story.append(KeepTogether(panel([
+            _p(reliability.title, _h2_gold),
             Spacer(1, 4),
-            *[Paragraph(escape(r), _body_ink) for r in reliability.reasons],
+            *[_p(r, _body) for r in reliability.reasons],
             Spacer(1, 4),
-            Paragraph(escape(reliability.recommendation or ""), _body),
-        ], GOLD, NOTICE))
-    story.append(Spacer(1, 18))
+            _p(reliability.recommendation, _body_muted),
+        ], GOLD, NOTICE)))
+    if content.findings:
+        story.append(Spacer(1, 12))
+        rows = [
+            [Paragraph(f"<b>{escape(f.title)}</b><br/><font color='#45453F'>{escape(f.detail)}</font>", _td),
+             _status_cell(f.status)]
+            for f in content.findings
+        ]
+        subheading("Key findings", table(["Finding", "Status"], rows, [0.78, 0.22]))
+    if content.interventions:
+        # The summary page names every recommended action, in the backend's priority order;
+        # what each involves and why follows in the sections below.
+        rows = [
+            [
+                Paragraph(
+                    f"<b>{escape(item.title)}</b> &nbsp;<font color='#6E6E68'>"
+                    f"{escape(_AREA_LABEL.get(item.area, item.area))}{' · priority' if i == 0 else ''}</font>",
+                    _td,
+                ),
+                _status_cell(_STATUS_LABEL[item.status]),
+            ]
+            for i, item in enumerate(content.interventions)
+        ]
+        story.append(Spacer(1, 12))
+        subheading("Recommended actions", table(["Action", "Status"], rows, [0.78, 0.22]))
 
-    # 02 Priority action: the one thing to act on first.
-    numbered("Priority action")
+    # ---------------------------------------------------------- 2 Priority action
     if primary is None:
-        story.append(Paragraph("No body region was flagged often enough to need a specific action.", _body))
+        heading("Priority action", _p("No body region was flagged often enough to need a specific action.", _body_muted))
     else:
-        accent = RED if primary.status == "high" else GOLD
-        story.append(panel([
-            Paragraph(_AREA_LABEL[primary.area], _label),
-            Spacer(1, 4),
-            Paragraph(primary.title.upper(), ParagraphStyle("hero", fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=INK)),
-            Spacer(1, 8),
-            Paragraph(primary.recommendation, _lead),
-            Spacer(1, 8),
-            Paragraph(primary.observation, _body),
+        status = _STATUS_LABEL[primary.status]
+        heading("Priority action", panel([
+            _p(_AREA_LABEL.get(primary.area, primary.area), _small),
+            Spacer(1, 3),
+            _p(primary.title, _action),
             Spacer(1, 6),
-            Paragraph(f"Status: {_STATUS_LABEL[primary.status]}", ParagraphStyle("hero_status", parent=_label, textColor=_STATUS_COLOR[_STATUS_LABEL[primary.status]])),
-        ], accent))
-    story.append(Spacer(1, 18))
+            _p(primary.recommendation, ParagraphStyle("rec", parent=_body, fontSize=10.5, leading=14.5)),
+            Spacer(1, 6),
+            _p(primary.observation, _body_muted),
+            Spacer(1, 6),
+            Paragraph(f"Status: {escape(status)}", ParagraphStyle(
+                "hero_status", parent=_td_bold, textColor=_STATUS_COLOR.get(status, INK))),
+        ], RED if primary.status == "high" else GOLD))
 
-    # 03 Recommended product to evaluate: only when a finding qualifies.
+    # ---------------------------------------------------------- Recommended product (when one qualifies)
     if product is not None:
-        numbered(PRODUCT_SECTION, keep_with_next=90 * mm)
-        story.append(_product_block(product, width, panel, bullets))
-        story.append(Spacer(1, 18))
+        heading(PRODUCT_SECTION, _product_block(product, panel, bullets), keep=70 * mm)
 
-    # Other actions: concise, only regions with evidence.
-    numbered("Other actions")
+    # ---------------------------------------------------------- Other actions
     if not others:
-        story.append(Paragraph("No other body region needed action.", _body))
+        heading("Other actions", _p("No other body region needed action.", _body_muted))
     else:
-        rows = [["", "ACTION", "STATUS"]]
-        for i, item in enumerate(others, start=1):
-            rows.append([
-                f"{i:02d}",
-                Paragraph(f"<b>{item.title.upper()}</b><br/>{item.recommendation}<br/><font color='#8C8C85'>{item.observation}</font>", _body_ink),
-                _STATUS_LABEL[item.status],
-            ])
-        story.append(table(rows, [0.08, 0.72, 0.2], status_col=2))
-    story.append(Spacer(1, 18))
+        rows = [
+            [
+                Paragraph(
+                    f"<b>{escape(item.title)}</b> &nbsp;<font color='#6E6E68'>{escape(_AREA_LABEL.get(item.area, item.area))}</font>"
+                    f"<br/>{escape(item.recommendation)}<br/><font color='#45453F'>{escape(item.observation)}</font>",
+                    _td,
+                ),
+                _status_cell(_STATUS_LABEL[item.status]),
+            ]
+            for item in others
+        ]
+        heading("Other actions", table(["Action", "Status"], rows, [0.78, 0.22]))
 
-    # Measurements: averages and overall peaks across all analyzed frames.
-    numbered("Measurements")
-    rows = [["REGION", "AVERAGE", "PEAK", "STATUS"]]
+    # ---------------------------------------------------------- Measurements
+    rows = []
     for m in content.measurements:
         label = "Back / trunk" if m.metric == "trunk" else m.label
-        rows.append([label, deg(m.average_deg), deg(m.maximum_deg), _STATUS_LABEL[_status(m, overall)]])
-    story.append(table(rows, [0.4, 0.18, 0.18, 0.24], status_col=3))
+        rows.append([label, deg(m.average_deg), deg(m.maximum_deg), _status_cell(_STATUS_LABEL[_status(m, overall)])])
+    heading("Measurements", table(["Body region", "Average", "Peak", "Status"], rows, [0.4, 0.18, 0.18, 0.24]))
     story.append(Spacer(1, 4))
-    story.append(Paragraph(content.measurement_note, _small))
-    story.append(Spacer(1, 18))
+    story.append(_p(content.measurement_note, _small))
 
-    # Posture evidence. The heading stays with its images.
-    numbered("Posture evidence", keep_with_next=110 * mm)
+    # ---------------------------------------------------------- Posture evidence
     frames = evidence_frames(assessment, content.measurements, content.rula, content.reba, overall, content.interventions)
     if frames:
         video = (assessment.capture_metadata or {}).get("video") or {}
         fw, fh = int(video.get("width") or 0), int(video.get("height") or 0)
-        cell = (width - 8 * mm) / 2
-        cells = []
-        for index, frame, reason in frames:
-            cells.append([
-                _pose(frame, cell, fw, fh),
-                Spacer(1, 3),
-                Paragraph(f"FRAME {index + 1:02d} · {frame.get('t', 0):.1f} s", _label),
-                Paragraph(reason.upper(), _label_ink),
-            ])
-        grid = [cells[i:i + 2] + [""] * (2 - len(cells[i:i + 2])) for i in range(0, len(cells), 2)]
-        story.append(Table(grid, colWidths=[cell + 4 * mm, cell + 4 * mm], style=[
-            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
-        ]))
-        story.append(Paragraph("Detected pose from the stored landmarks. The original video is not retained by the server.", _small))
-    else:
-        story.append(Paragraph("No scored frame is available to show.", _body))
-    story.append(Spacer(1, 18))
-
-    # Camera view and reliability.
-    numbered("Camera view and reliability")
-    if reliability is not None:
-        story.append(Paragraph(escape(reliability.explanation), _body_ink))
-        story.append(Spacer(1, 8))
-        rows = [
-            ["Measured frames filmed close to side-on", "—" if reliability.side_on_fraction is None else f"{reliability.side_on_fraction * 100:.0f}%"],
-            ["Sampled frames with the worker detected", "—" if reliability.detection_fraction is None else f"{reliability.detection_fraction * 100:.0f}%"],
+        portrait = bool(fw and fh and fh > fw)
+        columns = 3 if portrait else 2
+        gap = 6 * mm
+        cell = (width - gap * (columns - 1)) / columns
+        cells = [
+            [
+                _pose(frame, cell, 62 * mm, fw, fh),
+                Spacer(1, 4),
+                _p(f"Frame {index + 1} · {frame.get('t', 0):.1f} s", _small),
+                _p(reason, _td_bold),
+            ]
+            for index, frame, reason in frames
         ]
-        story.append(table(rows, [0.75, 0.25], header=False))
+        grid = [cells[i:i + columns] + [""] * (columns - len(cells[i:i + columns])) for i in range(0, len(cells), columns)]
+        evidence = Table(grid, colWidths=[cell + gap] * (columns - 1) + [cell], hAlign="LEFT", style=[
+            ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ])
+        first_row = min(62 * mm, cell / (fw / fh) if fw and fh else cell * 9 / 16) + 30
+        heading("Posture evidence", evidence, keep=first_row + 40)
+        story.append(_p("Detected pose drawn from the stored landmarks. The original video is not retained by the server.", _small))
+    else:
+        heading("Posture evidence", _p("No scored frame is available to show.", _body_muted))
+
+    # ---------------------------------------------------------- Camera view and reliability
+    if reliability is not None:
+        def percent(v):
+            return "—" if v is None else f"{v * 100:.0f}%"
+
+        heading("Camera view and reliability", _p(reliability.explanation, _body))
         story.append(Spacer(1, 8))
+        story.append(table(None, [
+            ["Measured frames filmed close to side-on", percent(reliability.side_on_fraction)],
+            ["Sampled frames with the worker detected", percent(reliability.detection_fraction)],
+        ], [0.75, 0.25]))
+        story.append(Spacer(1, 10))
         if limited:
-            story.append(Paragraph(reliability.title.upper(), ParagraphStyle("notice2", parent=_label_ink, textColor=GOLD_INK)))
-            story.append(Spacer(1, 3))
-            for text in reliability.reasons:
-                story.append(Paragraph(escape(text), _body))
-                story.append(Spacer(1, 3))
-            story.append(Paragraph(escape(reliability.recommendation or ""), _body_ink))
-        else:
             story.append(Paragraph(
-                "No camera-view limitation was detected by these checks. This is not a confidence rating; "
-                "the limitations above still apply.",
+                f"<font color='#7A5C14'><b>{escape(reliability.title)}.</b></font> "
+                "The reasons and what to do about them are given under Overall assessment.",
                 _body,
             ))
-    story.append(Spacer(1, 18))
+        else:
+            story.append(_p(
+                "No camera-view limitation was detected by these checks. This is not a confidence rating; "
+                "the limitations in the appendix still apply.",
+                _body_muted,
+            ))
+    else:
+        heading("Camera view and reliability", _p("No camera-view information is stored for this assessment.", _body_muted))
 
-    # Technical details and assessment limitations: an appendix for professional review.
-    section(None, content.technical_section)
-    story.append(Paragraph("RULA / REBA SCORES", _label_ink))
-    story.append(Spacer(1, 4))
+    # ---------------------------------------------------------- Appendix: technical details and limitations
+    story.append(CondPageBreak(60 * mm))
+    rows = []
     for method, r in (("RULA", content.rula), ("REBA", content.reba)):
         if r is None:
+            rows.append([method, "—", "Not measured", "—", "—"])
             continue
         dist = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in r.risk_distribution.items() if v) or "—"
-        story.append(Paragraph(
-            f"<b>{method}</b> &nbsp; {r.score:02d} / {r.scale_max:02d} · {(r.risk or '—').replace('_', ' ')} risk. "
-            f"{r.frames_scored} frames scored. Frames by risk band: {dist}.",
-            _body,
-        ))
-        story.append(Spacer(1, 4))
-    story.append(Paragraph(
-        "Scores are the peak per-frame score reported by the VigilEx pipeline; band is the component's score "
-        "within its range.",
+        rows.append([method, score(r), _risk_words(r.risk) if r.score is not None else "Not measured", str(r.frames_scored), dist])
+    heading(
+        content.technical_section,
+        _p("Scores", _h2),
+        Spacer(1, 4),
+        table(["Method", "Peak score", "Risk level", "Frames scored", "Frames by risk band"], rows,
+              [0.13, 0.15, 0.2, 0.16, 0.36], right_from=5),
+        top=22,
+    )
+    story.append(Spacer(1, 4))
+    story.append(_p(
+        "Scores are the peak per-frame score reported by the VigilEx pipeline; a component's band is its score within its range.",
         _small,
     ))
-    story.append(Spacer(1, 12))
     if content.component_tables:
-        story.append(Paragraph(COMPONENT_HEADING.upper(), _label_ink))
-        story.append(Spacer(1, 4))
-        story.append(Paragraph(escape(content.component_note), _body_ink))
-        story.append(Spacer(1, 8))
+        story.append(Spacer(1, 14))
+        subheading(COMPONENT_HEADING[0].upper() + COMPONENT_HEADING[1:], _p(content.component_note, _body_muted))
         for t in content.component_tables:
             at = f"frame {t.frame_number}" + ("" if t.frame_time_sec is None else f" · {t.frame_time_sec:.1f} s")
-            rows = [["COMPONENT", "ANGLE", "BAND"]] + [
+            rows = [
                 [
                     c.name,
                     deg(c.angle_deg) if c.measured else "Not observable",
@@ -773,27 +926,35 @@ def render_pdf(assessment: Assessment, content: ReportContent, target: Path) -> 
                 ]
                 for c in t.rows
             ]
+            story.append(Spacer(1, 10))
             story.append(KeepTogether([
-                Paragraph(f"<b>{escape(t.title)}</b> &nbsp; score {t.score:02d} / {t.scale_max:02d} · {at}", _body_ink),
+                Paragraph(f"<b>{escape(t.method)}</b> &nbsp;score {t.score} / {t.scale_max} · {escape(at)}", _td),
                 Spacer(1, 3),
-                table(rows, [0.5, 0.25, 0.25]),
-                Spacer(1, 12),
+                table(["Component", "Angle", "Band"], rows, [0.5, 0.25, 0.25]),
             ]))
-    story.append(Paragraph("METHODOLOGY", _label_ink))
-    story.append(Spacer(1, 3))
-    for text in content.methodology:
-        story.append(Paragraph(escape(text), _body))
-        story.append(Spacer(1, 4))
-    story.append(Spacer(1, 6))
-    story.append(Paragraph("LIMITATIONS", _label_ink))
-    story.append(Spacer(1, 3))
-    for text in content.limitations:
-        story.append(Paragraph(escape(text), _body))
-        story.append(Spacer(1, 4))
-    story.append(Spacer(1, 6))
-    story.append(Paragraph(f"Methodology version: {content.methodology_version}", _small))
+    story.append(Spacer(1, 14))
+    version = _p(f"Methodology version: {content.methodology_version}", _small)
+    # The camera-view limitation is printed in full on the first page, so the list does not repeat it.
+    printed_limitations = [
+        item for item in content.limitations
+        if not (limited and reliability.title and item.startswith(f"{reliability.title}:"))
+    ]
+    for title, items in (("Methodology", content.methodology), ("Limitations", printed_limitations)):
+        points = bullets(items)
+        subheading(title, *points[:1])  # The heading stays with its first point; the rest flow on.
+        if title == "Limitations" and len(points) > 1:
+            # The version line never sits alone on a final page.
+            story.extend(points[1:-1])
+            story.append(KeepTogether([points[-1], Spacer(1, 10), version]))
+        else:
+            story.extend(points[1:])
+        if title == "Methodology":
+            story.append(Spacer(1, 12))  # Never after the last block: a trailing spacer can open a blank page.
+    if len(printed_limitations) <= 1:
+        story.append(version)
 
-    doc.build(story, onFirstPage=frame_page, onLaterPages=frame_page)
+    footer = f"{name} · {content.analyzed_at:%d %b %Y}"
+    doc.build(story, canvasmaker=_numbered_canvas(footer))
 
 
 def generate_report(assessment: Assessment) -> tuple[ReportContent, Path]:
