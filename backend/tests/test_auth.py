@@ -347,6 +347,26 @@ def test_hierarchy_is_scoped_to_the_accounts_organization(db, user):
     assert them.post("/api/v1/organizations", json={"name": "New"}).status_code == 403
 
 
+
+def test_another_organization_cannot_change_or_delete_the_hierarchy(db, user):
+    """An organization without sites of its own used to see, edit and delete every organization's hierarchy."""
+    mine = client_for(user)
+    site = mine.post("/api/v1/sites", json={"organization_id": str(user.organization_id), "name": "Mine"}).json()
+    area = mine.post("/api/v1/areas", json={"site_id": site["id"], "name": "Line"}).json()
+    task = mine.post("/api/v1/tasks", json={"area_id": area["id"], "name": "Lift"}).json()
+    other = make_user(db, "other@example.com", "Other")
+    them = client_for(other)
+
+    assert them.get("/api/v1/areas").json() == [] and them.get("/api/v1/tasks").json() == []
+    for kind, item in (("sites", site), ("areas", area), ("tasks", task)):
+        assert them.get(f"/api/v1/{kind}/{item['id']}").status_code == 404
+        assert them.delete(f"/api/v1/{kind}/{item['id']}").status_code == 404
+    moved = {"organization_id": str(other.organization_id), "name": "Taken"}
+    assert them.put(f"/api/v1/sites/{site['id']}", json=moved).status_code == 404
+    # Nothing changed for the owner.
+    assert mine.get(f"/api/v1/sites/{site['id']}").json()["name"] == "Mine"
+    assert mine.get(f"/api/v1/tasks/{task['id']}").status_code == 200
+
 # ================================================================ unowned historical assessments
 
 def test_unowned_assessments_are_visible_to_no_account(db, user, real_result):

@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.extrive.vigilex.RECORDINGS_DIR
 import com.extrive.vigilex.data.media.SelectedVideo
 import com.extrive.vigilex.data.model.AnalysisResult
 import com.extrive.vigilex.data.settings.ServerSettings
@@ -245,7 +246,7 @@ private fun launchCameraRecording(
     onError: (String) -> Unit
 ) {
     try {
-        val recordDir = File(context.cacheDir, "recordings").apply { mkdirs() }
+        val recordDir = File(context.cacheDir, RECORDINGS_DIR).apply { mkdirs() }
         val tempFile = File.createTempFile("record_", ".mp4", recordDir)
         val uri = FileProvider.getUriForFile(
             context,

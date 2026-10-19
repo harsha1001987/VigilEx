@@ -16,7 +16,8 @@ object NetworkModule {
         explicitNulls = false
     }
 
-    private val loggingInterceptor = HttpLoggingInterceptor().apply {
+    // Through NetLog, so request lines reach Logcat only in debuggable builds.
+    private val loggingInterceptor = HttpLoggingInterceptor { message -> NetLog.i(message) }.apply {
         level = HttpLoggingInterceptor.Level.BASIC
         redactHeader(AuthInterceptor.HEADER)
     }

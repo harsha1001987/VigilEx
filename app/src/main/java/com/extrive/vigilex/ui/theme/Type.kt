@@ -18,9 +18,9 @@ private const val TABULAR = "tnum"
 object VxType {
     val splash = TextStyle(
         fontFamily = Sans,
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 30.sp,
-        letterSpacing = (-0.4).sp
+        fontWeight = FontWeight.Medium,
+        fontSize = 26.sp,
+        letterSpacing = 14.sp
     )
 
     /** "VigilEx" beside the yellow brand square in headers. */

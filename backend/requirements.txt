@@ -5,9 +5,18 @@ psycopg[binary]==3.2.3
 alembic==1.14.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 python-multipart==0.0.32
 reportlab==4.4.4
 argon2-cffi==23.1.0
-PyJWT==2.10.1
+PyJWT==2.15.0
 email-validator==2.2.0
+
+# ---- Pose and tracking pipeline (app/cv): YOLO11n-Pose + ByteTrack, scored to RULA/REBA.
+# Versions are the ones the test suite was verified with. torch is CPU-only here; on Linux
+# install the CPU wheel with: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+ultralytics==8.3.61
+torch==2.12.1
+opencv-python==4.10.0.84
+numpy==2.4.4
+lap==0.5.13

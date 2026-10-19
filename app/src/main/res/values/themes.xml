@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Warm-white window background so launch goes straight into the warm-white splash without a flash. -->
+    <!-- Yellow window background so launch goes straight into the yellow splash without a white flash. -->
     <style name="Theme.VigilEx" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@color/vigilex_canvas</item>
+        <item name="android:windowBackground">@color/vigilex_yellow</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
 </resources>

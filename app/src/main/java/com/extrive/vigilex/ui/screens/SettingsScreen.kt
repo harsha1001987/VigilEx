@@ -174,9 +174,10 @@ fun SettingsScreen(
         InfoDialog(
             title = "Privacy",
             message = "When you analyze a video, VigilEx uploads it to the VigilEx server you are signed in to, " +
-                "which measures posture and calculates RULA and REBA. The assessment is saved to your account on " +
-                "that server. You can delete an assessment from its page, or all of them here in Settings. " +
-                "The video on this device is not changed. Signing out removes downloaded reports from this device.",
+                "which measures posture and calculates RULA and REBA, then deletes the uploaded video. The assessment " +
+                "is saved to your account on that server. You can delete an assessment from its page, or all of them " +
+                "here in Settings. A video chosen from your device is not changed. Signing out removes downloaded " +
+                "reports and videos recorded in VigilEx from this device.",
             onDismiss = { showPrivacy = false }
         )
     }

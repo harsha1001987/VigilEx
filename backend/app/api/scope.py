@@ -1,15 +1,15 @@
 """
 Organization scoping for the site / area / task hierarchy.
 
-A user sees and changes the hierarchy of their own organization. When an
-organization has no custom sites yet, default seeded sites are visible so
-the user can immediately run posture assessments.
+A user sees and changes only the hierarchy of their own organization. There
+is no cross-organization fallback: an organization without sites sees none
+(previously it saw every organization's sites, and could edit or delete them).
 """
 
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import false, select
 from sqlalchemy.orm import Session
 
 from app.models.area import Area
@@ -23,35 +23,29 @@ def not_found(what: str) -> HTTPException:
 
 
 def own_organization(organization_id: uuid.UUID, user: User) -> None:
-    if user.organization_id is not None and organization_id != user.organization_id:
+    if organization_id != user.organization_id:
         raise not_found("Organization")
 
 
+def _in_own_organization(user: User):
+    # organization_id is NOT NULL; an account without one is denied rather than unscoped.
+    return Site.organization_id == user.organization_id if user.organization_id is not None else false()
+
+
 def sites(user: User):
-    if user.organization_id is None:
-        return select(Site)
-    has_own_sites = select(Site).where(Site.organization_id == user.organization_id).exists()
-    return select(Site).where((Site.organization_id == user.organization_id) | (~has_own_sites))
+    return select(Site).where(_in_own_organization(user))
 
 
 def areas(user: User):
-    if user.organization_id is None:
-        return select(Area)
-    has_own_sites = select(Site).where(Site.organization_id == user.organization_id).exists()
-    return select(Area).join(Site, Area.site_id == Site.id).where(
-        (Site.organization_id == user.organization_id) | (~has_own_sites)
-    )
+    return select(Area).join(Site, Area.site_id == Site.id).where(_in_own_organization(user))
 
 
 def tasks(user: User):
-    if user.organization_id is None:
-        return select(Task)
-    has_own_sites = select(Site).where(Site.organization_id == user.organization_id).exists()
     return (
         select(Task)
         .join(Area, Task.area_id == Area.id)
         .join(Site, Area.site_id == Site.id)
-        .where((Site.organization_id == user.organization_id) | (~has_own_sites))
+        .where(_in_own_organization(user))
     )
 
 

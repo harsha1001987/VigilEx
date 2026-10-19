@@ -39,6 +39,9 @@ import kotlinx.coroutines.launch
 
 private const val SPLASH_HOLD_MS = 1100L
 
+/** Where in-app recordings are written; matches res/xml/report_paths.xml and AssessmentStudioScreen. */
+const val RECORDINGS_DIR = "recordings"
+
 /** Outlives the activity: session checks and sign-out cleanup must finish across rotation. */
 private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -83,8 +86,8 @@ class MainActivity : ComponentActivity() {
     /**
      * Restores the saved session (expired ones are discarded) and confirms it
      * with the server in the background. Every sign-out removes the previous
-     * account's data from this device: downloaded report PDFs, the video
-     * links of its assessments and any analysis on screen.
+     * account's data from this device: downloaded report PDFs, videos recorded
+     * in the app, the video links of its assessments and any analysis on screen.
      */
     private fun startSession() {
         if (AccountSession.onSignedOut == null) {
@@ -93,6 +96,8 @@ class MainActivity : ComponentActivity() {
                 AssessmentStudio.reset()
                 appScope.launch {
                     File(cacheDir, ReportService.REPORT_DIR).deleteRecursively()
+                    // In-app recordings are workplace video; they never outlive the account that made them.
+                    File(cacheDir, RECORDINGS_DIR).deleteRecursively()
                     AssessmentStore.cleared()
                 }
             }

@@ -10,6 +10,8 @@ import androidx.compose.ui.graphics.Color
 // Brand
 /** Brand and primary-action fill. Never text on light surfaces (1.5:1); Charcoal on it is 11.3:1. */
 val Yellow = Color(0xFFF4C928)
+/** The original launch splash field; matches @color/vigilex_yellow (window and system splash). Splash only. */
+val SplashYellow = Color(0xFFFFD21F)
 /** Pure black, reserved for video and camera backgrounds. */
 val Black = Color(0xFF0A0A0A)
 /** Structure and text: 16.7:1. */
